@@ -270,6 +270,103 @@ function include(filename) {
 }
 
 /**
+ * COLUMN PROJECTION
+ *
+ * CAPWATCH files are much wider than the app needs. MbrTasks alone shipped 22
+ * columns to every browser on every load while the client reads 5 of them, and
+ * PL_MemberTaskCredit shipped a free-text Comments column referenced nowhere.
+ *
+ * Projecting at sync time shrinks the DB sheet and the payload together, and
+ * costs nothing per request. The keep-lists live on fileMap entries below;
+ * each one was derived by tracing the columns the client actually reads.
+ *
+ * Only tables whose rows are consumed by explicit field access are projected.
+ * Tables whose rows get spread into other objects (members, cadetHFZ) are left
+ * whole, because a spread can carry any column into the UI.
+ */
+
+/**
+ * Split a CSV line into raw fields, leaving quoting exactly as it was found so
+ * the retained columns survive projection byte-for-byte.
+ */
+function splitCsvLineRaw_(line) {
+  // Fast path: no quotes means no embedded commas
+  if (line.indexOf('"') === -1) return line.split(',');
+
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; cur += ch; }
+    else if (ch === ',' && !inQuotes) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * Drop every column except those named in keepColumns.
+ *
+ * Returns the content unchanged if the header cannot be read, if no requested
+ * column is present, or if nothing would be dropped - a projection that cannot
+ * be done confidently is not worth risking, and shipping extra columns is the
+ * status quo rather than a failure.
+ *
+ * Matches the client's parseCSV assumption that records do not contain
+ * embedded newlines.
+ */
+function projectCsvColumns_(content, keepColumns, label) {
+  if (!content || !keepColumns || !keepColumns.length) return content;
+
+  const firstBreak = content.indexOf('\n');
+  if (firstBreak === -1) return content;
+
+  const headerLine = content.substring(0, firstBreak).replace(/\r$/, '');
+  const rawHeaders = splitCsvLineRaw_(headerLine);
+  const names = rawHeaders.map(function (h) { return h.trim().replace(/^"|"$/g, ''); });
+
+  const wanted = {};
+  keepColumns.forEach(function (c) { wanted[c] = true; });
+
+  const indices = [];
+  names.forEach(function (n, i) { if (wanted[n]) indices.push(i); });
+
+  const missing = keepColumns.filter(function (c) { return names.indexOf(c) === -1; });
+  if (missing.length) {
+    Logger.log("  WARNING: " + label + " missing expected column(s): " + missing.join(', '));
+  }
+
+  if (!indices.length) {
+    Logger.log("  WARNING: " + label + " matched no keep-columns, keeping file whole");
+    return content;
+  }
+  if (indices.length === names.length) return content;
+
+  const lines = content.split('\n');
+  const out = [];
+  const width = indices.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (!line) continue;
+    if (line.charCodeAt(line.length - 1) === 13) line = line.substring(0, line.length - 1);
+    if (!line) continue;
+
+    const fields = splitCsvLineRaw_(line);
+    const picked = new Array(width);
+    for (let c = 0; c < width; c++) {
+      const v = fields[indices[c]];
+      picked[c] = v === undefined ? '' : v;
+    }
+    out.push(picked.join(','));
+  }
+
+  return out.join('\n');
+}
+
+/**
  * SYNC FUNCTION (Trigger this to run hourly)
  */
 function syncDriveToSheet() {
@@ -334,11 +431,18 @@ function syncDriveToSheet() {
     'Tasks': { cat: 'config', key: 'esTasks', exclude: 'PL_|Mbr|Cadet|AchvStep', priority: 7 }, // ES task definitions
     'AchvStepTasks': { cat: 'config', key: 'esAchvStepTasks', priority: 8 }, // ES tasks per achievement step
     'AchvStepAchv': { cat: 'config', key: 'esAchvStepAchv', priority: 9 }, // ES achievement prerequisites
-    'PL_MemberTaskCredit': { cat: 'data', key: 'memberTasks', priority: 10 },
+    // Comments is free text referenced nowhere in the client (~3.4MB in production)
+    'PL_MemberTaskCredit': { cat: 'data', key: 'memberTasks', priority: 10,
+      columns: ['CAPID', 'TaskID', 'StatusID', 'Completed', 'Expiration', 'MemberTaskCreditID', 'MemberTaskID', 'AdditionalOptions'] },
     'PL_MemberPathCredit': { cat: 'data', key: 'memberPaths', priority: 11 },
     // ES Member Data Files
-    'MbrAchievements': { cat: 'data', key: 'esMbrAchievements', priority: 12 }, // Member ES achievement completions
-    'MbrTasks': { cat: 'data', key: 'esMbrTasks', priority: 13 }, // Member ES task completions (large file, ~15MB)
+    // Fields read by buildESQualifications / the ES unit analysis service
+    'MbrAchievements': { cat: 'data', key: 'esMbrAchievements', priority: 12,
+      columns: ['CAPID', 'AchvID', 'Status', 'Completed', 'Expiration', 'OriginallyAccomplished', 'AuthByCAPID', 'AuthDate', 'Source'] }, // Member ES achievement completions
+    // Largest table in the payload (~35MB, 41%). Its only two consumers read
+    // TaskID/Status/Completed/Expiration, plus CAPID for indexing.
+    'MbrTasks': { cat: 'data', key: 'esMbrTasks', priority: 13,
+      columns: ['CAPID', 'TaskID', 'Status', 'Completed', 'Expiration'] }, // Member ES task completions
     'Member': { cat: 'data', key: 'members', exclude: 'Current|Prm|Instrumentation|Currency', priority: 14 }, // Exclude CurrentMembers.txt, MemberPrm.txt, MemberInstrumentation.txt, MemberCurrency.txt
     'SpecTrack': { cat: 'data', key: 'tracks', priority: 15 },
     'Organization': { cat: 'data', key: 'organization', priority: 16 },
@@ -359,7 +463,9 @@ function syncDriveToSheet() {
     'Training': { cat: 'data', key: 'training', priority: 30 },
     'SeniorAwards': { cat: 'data', key: 'seniorAwards', priority: 31 },
     'OFlight': { cat: 'data', key: 'oFlights', priority: 32 },
-    'ORGStatistics': { cat: 'data', key: 'orgStats', priority: 33 },
+    // Region/Unit/Wing are constant for a single wing and unread by the service
+    'ORGStatistics': { cat: 'data', key: 'orgStats', priority: 33,
+      columns: ['ORGID', 'CntDate', 'CntType', 'MbrType', 'Quantity'] },
     'PL_VolUInstructors': { cat: 'data', key: 'voluInstructors', priority: 34 },
     'GoogleAdoptionStats': { cat: 'data', key: 'googleAdoption', priority: 35 },
     'GoogleAdoptionUsers': { cat: 'data', key: 'googleAdoptionUsers', priority: 36 }
@@ -414,7 +520,19 @@ function syncDriveToSheet() {
   fileList.forEach((item, idx) => {
     try {
       Logger.log("Processing file " + (idx + 1) + "/" + fileList.length + ": " + item.name);
-      const content = item.file.getBlob().getDataAsString();
+      let content = item.file.getBlob().getDataAsString();
+
+      if (item.match.columns) {
+        const beforeLen = content.length;
+        content = projectCsvColumns_(content, item.match.columns, item.name);
+        const saved = beforeLen - content.length;
+        if (saved > 0) {
+          Logger.log("  Projected to " + item.match.columns.length + " columns: " +
+            beforeLen + " -> " + content.length + " chars (saved " +
+            (saved / 1048576).toFixed(2) + " MB)");
+        }
+      }
+
       const CHUNK_SIZE = 40000;
       const totalLength = content.length;
       let chunkIndex = 0;
