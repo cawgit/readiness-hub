@@ -377,26 +377,10 @@
             if (/^\d+$/.test(rawUnit)) memberUnitNum.set(orgId, padUnitNum(rawUnit));
           });
 
-          // Walk NextLevel up from every populated unit so each ancestor
-          // echelon is present even when it has no members of its own - a
-          // squadron needs its group in the list to nest under. The walk stops
-          // at the top of the loaded extract, so a wing-scoped download does
-          // not sprout a region entry it has no data for.
-          const included = new Set();
-          populated.forEach(orgId => {
-            let curr = orgId;
-            while (curr && !included.has(curr) && orgById.has(curr)) {
-              included.add(curr);
-              const parent = String(orgById.get(curr).NextLevel || '').trim();
-              curr = parent === curr ? '' : parent;
-            }
-          });
-
-          const entryById = new Map();
-          included.forEach(orgId => {
+          const entryFor = (orgId) => {
             const org = orgById.get(orgId);
             const unitNum = padUnitNum(org.Unit) || memberUnitNum.get(orgId) || '';
-            entryById.set(orgId, {
+            return {
               // Keep ORGID verbatim: this is the value the rest of the app
               // compares unitFilter against, sometimes without trimming.
               id: org.ORGID,
@@ -406,7 +390,18 @@
               shortName: String(org.Name || '').trim(),
               echelon: getUnitEchelon(org.Type),
               parentId: String(org.NextLevel || '').trim()
-            });
+            };
+          };
+
+          // Only units that actually have members. A wing-scoped extract still
+          // carries the region and national org records above the wing, and
+          // pulling those in as ancestors offered echelons whose data is not
+          // in the download - a region entry would show one wing's numbers
+          // labelled as the region's. Groups needed purely to nest a squadron
+          // under are added back below.
+          const entryById = new Map();
+          populated.forEach(orgId => {
+            if (orgById.has(orgId)) entryById.set(orgId, entryFor(orgId));
           });
 
           // Units whose org record is missing entirely: keep them selectable
@@ -451,6 +446,18 @@
             if (isNaN(bn)) return -1;
             return an - bn;
           };
+
+          // A group with no members of its own still has to appear once one of
+          // its squadrons does, or the squadron has nothing to nest under and
+          // reads as reporting straight to the wing. It stays selectable:
+          // unlike a region in a wing extract, its subordinate data is all
+          // here, so a group rollup with Include Sub-Units is real.
+          Array.from(entryById.values())
+            .filter(e => e.echelon === 'SQUADRON')
+            .forEach(e => {
+              const groupId = groupIdFor(e);
+              if (groupId && !entryById.has(groupId)) entryById.set(groupId, entryFor(groupId));
+            });
 
           const entries = Array.from(entryById.values());
           const headquarters = entries
