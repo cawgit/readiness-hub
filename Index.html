@@ -90,6 +90,28 @@
     <script type="text/babel">
       const { useState, useMemo, useEffect, useCallback } = React;
 
+      // CAP echelons, highest headquarters first. Squadrons and flights share
+      // the bottom rank because the unit picker nests them under their group
+      // rather than separating them by unit type.
+      const UNIT_ECHELONS = ['NATIONAL', 'REGION', 'WING', 'GROUP', 'SQUADRON'];
+
+      // Organization.Type carries the echelon as free text ("COMPOSITE
+      // SQUADRON", "GROUP", "WING"), which is how the rest of the app reads it.
+      const getUnitEchelon = (type) => {
+        const t = String(type || '').toUpperCase();
+        if (t.includes('NATIONAL')) return 'NATIONAL';
+        if (t.includes('REGION')) return 'REGION';
+        if (t.includes('WING')) return 'WING';
+        if (t.includes('GROUP')) return 'GROUP';
+        return 'SQUADRON';
+      };
+
+      // Unit numbers arrive zero-padded inconsistently ("4", "004", "0004").
+      const padUnitNum = (value) => {
+        const raw = String(value || '').trim();
+        return raw ? raw.replace(/^0+/, '').padStart(3, '0') : '';
+      };
+
       function App() {
         const [activeTab, setActiveTab] = useState('home');
         const [showReference, setShowReference] = useState(false);
@@ -323,37 +345,177 @@
            return results;
         };
 
-        const availableUnits = useMemo(() => {
-          if (!dataFiles.members.length) return [];
-          const units = new Map();
+        // Builds the unit picker as an echelon tree: headquarters first, then
+        // one section per group holding that group and its squadrons, then any
+        // unit reporting straight to the wing.
+        //
+        // The list is driven by Organization rather than by member unit
+        // numbers. The old member-driven build could only name the echelons it
+        // wanted to hide, and hid the wing and one group by hard-coded unit
+        // number ('000' and '004') - which left the wing unselectable even
+        // though wing scope is what most of the app branches on.
+        const unitPicker = useMemo(() => {
+          const members = dataFiles.members || [];
+          if (!members.length) return { units: [], optionGroups: [] };
 
-          dataFiles.members.forEach(m => {
-            if (m.ORGID && m.Unit && !isNaN(parseInt(m.Unit)) && /^\d+$/.test(m.Unit.trim())) {
-               const cleanUnit = m.Unit.replace(/^0+/, '').padStart(3, '0');
-               if (cleanUnit === '000' || cleanUnit === '004') return;
-               if(!units.has(m.ORGID)){
-                  units.set(m.ORGID, { id: m.ORGID, unitNum: cleanUnit, name: `Unit ${cleanUnit}` });
-               }
+          const orgById = new Map();
+          (dataFiles.organization || []).forEach(o => {
+            orgById.set(String(o.ORGID || '').trim(), o);
+          });
+
+          // A unit with no members is noise in the picker. Members also carry
+          // their own unit number, which is the only identity available when
+          // an org is missing from the Organization table.
+          const populated = new Set();
+          const memberUnitNum = new Map();
+          members.forEach(m => {
+            const orgId = String(m.ORGID || '').trim();
+            if (!orgId) return;
+            populated.add(orgId);
+            if (memberUnitNum.has(orgId)) return;
+            const rawUnit = String(m.Unit || '').trim();
+            if (/^\d+$/.test(rawUnit)) memberUnitNum.set(orgId, padUnitNum(rawUnit));
+          });
+
+          // Walk NextLevel up from every populated unit so each ancestor
+          // echelon is present even when it has no members of its own - a
+          // squadron needs its group in the list to nest under. The walk stops
+          // at the top of the loaded extract, so a wing-scoped download does
+          // not sprout a region entry it has no data for.
+          const included = new Set();
+          populated.forEach(orgId => {
+            let curr = orgId;
+            while (curr && !included.has(curr) && orgById.has(curr)) {
+              included.add(curr);
+              const parent = String(orgById.get(curr).NextLevel || '').trim();
+              curr = parent === curr ? '' : parent;
             }
           });
 
-          if(dataFiles.organization.length){
-             dataFiles.organization.forEach(o => {
-                if(units.has(o.ORGID)) {
-                   const entry = units.get(o.ORGID);
-                   const cleanUnit = o.Unit ? o.Unit.replace(/^0+/, '').padStart(3, '0') : entry.unitNum;
-                   entry.name = `${o.Region}-${o.Wing}-${cleanUnit} ${o.Name}`;
-                   entry.unitNum = cleanUnit;
-                }
-             });
-          }
+          const entryById = new Map();
+          included.forEach(orgId => {
+            const org = orgById.get(orgId);
+            const unitNum = padUnitNum(org.Unit) || memberUnitNum.get(orgId) || '';
+            entryById.set(orgId, {
+              // Keep ORGID verbatim: this is the value the rest of the app
+              // compares unitFilter against, sometimes without trimming.
+              id: org.ORGID,
+              orgId: orgId,
+              unitNum: unitNum,
+              name: `${org.Region || ''}-${org.Wing || ''}-${unitNum} ${org.Name || ''}`.trim(),
+              shortName: String(org.Name || '').trim(),
+              echelon: getUnitEchelon(org.Type),
+              parentId: String(org.NextLevel || '').trim()
+            });
+          });
 
-          return Array.from(units.values()).sort((a, b) => parseInt(a.unitNum) - parseInt(b.unitNum));
+          // Units whose org record is missing entirely: keep them selectable
+          // under their member-reported number rather than dropping them.
+          populated.forEach(orgId => {
+            if (orgById.has(orgId)) return;
+            const unitNum = memberUnitNum.get(orgId);
+            if (!unitNum) return;
+            entryById.set(orgId, {
+              id: orgId,
+              orgId: orgId,
+              unitNum: unitNum,
+              name: `Unit ${unitNum}`,
+              shortName: `Unit ${unitNum}`,
+              echelon: 'SQUADRON',
+              parentId: ''
+            });
+          });
+
+          // Nearest group ancestor, so a squadron sitting under a flight still
+          // lands in the right group section. Returns '' for units that report
+          // to the wing (or higher) without passing through a group.
+          const groupIdFor = (entry) => {
+            let curr = entry.parentId;
+            const seen = new Set([entry.orgId]);
+            while (curr && !seen.has(curr) && orgById.has(curr)) {
+              seen.add(curr);
+              const org = orgById.get(curr);
+              const echelon = getUnitEchelon(org.Type);
+              if (echelon === 'GROUP') return curr;
+              if (echelon !== 'SQUADRON') return '';
+              curr = String(org.NextLevel || '').trim();
+            }
+            return '';
+          };
+
+          const byUnitNum = (a, b) => {
+            const an = parseInt(a.unitNum, 10);
+            const bn = parseInt(b.unitNum, 10);
+            if (isNaN(an) && isNaN(bn)) return a.name.localeCompare(b.name);
+            if (isNaN(an)) return 1;
+            if (isNaN(bn)) return -1;
+            return an - bn;
+          };
+
+          const entries = Array.from(entryById.values());
+          const headquarters = entries
+            .filter(e => e.echelon !== 'GROUP' && e.echelon !== 'SQUADRON')
+            .sort((a, b) => UNIT_ECHELONS.indexOf(a.echelon) - UNIT_ECHELONS.indexOf(b.echelon) || byUnitNum(a, b));
+          const groups = entries.filter(e => e.echelon === 'GROUP').sort(byUnitNum);
+
+          const squadronsByGroup = new Map();
+          const directReporting = [];
+          entries.filter(e => e.echelon === 'SQUADRON').forEach(e => {
+            const groupId = groupIdFor(e);
+            if (groupId && entryById.has(groupId)) {
+              if (!squadronsByGroup.has(groupId)) squadronsByGroup.set(groupId, []);
+              squadronsByGroup.get(groupId).push(e);
+            } else {
+              directReporting.push(e);
+            }
+          });
+          squadronsByGroup.forEach(list => list.sort(byUnitNum));
+          directReporting.sort(byUnitNum);
+
+          // A native <select> only nests one level deep, so the squadrons are
+          // indented inside their group's <optgroup> rather than nested again.
+          // Non-breaking: browsers collapse leading whitespace in a label.
+          const INDENT = '    ';
+          const units = [];
+          const optionGroups = [];
+          const addSection = (key, label, sectionEntries, indentEntries) => {
+            if (!sectionEntries.length) return;
+            optionGroups.push({
+              key: key,
+              label: label,
+              options: sectionEntries.map(e => ({
+                id: e.id,
+                label: (indentEntries && indentEntries.has(e) ? INDENT : '') + e.name
+              }))
+            });
+            sectionEntries.forEach(e => units.push(e));
+          };
+
+          addSection('hq', null, headquarters, null);
+          groups.forEach(group => {
+            const squadrons = squadronsByGroup.get(group.orgId) || [];
+            addSection(
+              `group-${group.orgId}`,
+              group.shortName || group.name,
+              [group].concat(squadrons),
+              new Set(squadrons)
+            );
+          });
+          // Without groups there is nothing to distinguish these from, so the
+          // section header would just be a label over the whole list.
+          addSection('direct', groups.length ? 'Direct Reporting Units' : null, directReporting, null);
+
+          return { units: units, optionGroups: optionGroups };
         }, [dataFiles.members, dataFiles.organization]);
 
-        useEffect(() => { 
+        const availableUnits = unitPicker.units;
+        const unitOptionGroups = unitPicker.optionGroups;
+
+        useEffect(() => {
+            // First entry is now the highest echelon in the data (the wing for
+            // a wing-scoped extract) rather than the lowest-numbered squadron.
             if (!unitFilter && availableUnits.length > 0) {
-                setUnitFilter(availableUnits[0].id); 
+                setUnitFilter(availableUnits[0].id);
             }
         }, [availableUnits]);
 
@@ -7490,7 +7652,12 @@
                 <div className="flex items-center gap-2 w-full md:w-auto flex-nowrap">
                      <div className="relative flex-1 min-w-[200px]">
                         <select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} className="bg-blue-800 border border-blue-700 text-white rounded pl-2 pr-8 py-2 text-sm font-bold cursor-pointer focus:ring-1 focus:ring-blue-400 appearance-none w-full sm:max-w-[320px] truncate">
-                            {availableUnits.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                            {unitOptionGroups.map(section => {
+                              const options = section.options.map(o => <option key={o.id} value={o.id}>{o.label}</option>);
+                              return section.label
+                                ? <optgroup key={section.key} label={section.label}>{options}</optgroup>
+                                : <React.Fragment key={section.key}>{options}</React.Fragment>;
+                            })}
                         </select>
                         <Icon name="ChevronDown" className="w-4 h-4 text-blue-300 absolute right-2 top-2 pointer-events-none" />
                      </div>
