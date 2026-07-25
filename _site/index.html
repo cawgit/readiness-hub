@@ -51,7 +51,7 @@
 
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.10.12';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.14.2';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -1225,6 +1225,107 @@ const parseCSV = (text) => {
   });
 };
 
+/**
+ * ROW INDEXES
+ *
+ * The per-member builders used to re-scan an entire table for every member
+ * (`tasks.filter(t => t.CAPID === member.CAPID)`), so widening the scope from
+ * one squadron to a wing plus subunits multiplied the work by the member count
+ * rather than adding to it. These helpers group each table once so the same
+ * lookups become O(1).
+ *
+ * parseCSV already trims every value, so normalizing keys here matches both
+ * the strict (`a.CAPID === capid`) and defensive
+ * (`String(a.CAPID || '').trim() === ...`) comparisons being replaced.
+ *
+ * Returned arrays are the index's own buckets - read them, don't mutate them.
+ */
+const indexKey = (val) => String(val === undefined || val === null ? '' : val).trim();
+
+const groupRowsBy = (rows, field) => {
+  const map = new Map();
+  (rows || []).forEach(row => {
+    const key = indexKey(row[field]);
+    const bucket = map.get(key);
+    if (bucket) bucket.push(row);
+    else map.set(key, [row]);
+  });
+  return map;
+};
+
+// First row wins, matching the Array.prototype.find calls this replaces.
+const indexRowsBy = (rows, field) => {
+  const map = new Map();
+  (rows || []).forEach(row => {
+    const key = indexKey(row[field]);
+    if (!map.has(key)) map.set(key, row);
+  });
+  return map;
+};
+
+const EMPTY_ROWS = Object.freeze([]);
+const lookupRows = (map, key) => (map && map.get(indexKey(key))) || EMPTY_ROWS;
+const lookupRow = (map, key) => (map && map.get(indexKey(key))) || null;
+
+/**
+ * Indexes are cached against the identity of the raw data object, which is
+ * replaced wholesale on each parsePayload, so a new payload builds fresh
+ * indexes and the old ones become collectable.
+ */
+const _dataIndexCache = new WeakMap();
+const _configIndexCache = new WeakMap();
+
+const getDataIndexes = (dataFiles) => {
+  if (!dataFiles) return {};
+  const cached = _dataIndexCache.get(dataFiles);
+  if (cached) return cached;
+
+  const idx = {
+    dutyByCapid: groupRowsBy(dataFiles.duty, 'CAPID'),
+    tracksByCapid: groupRowsBy(dataFiles.tracks, 'CAPID'),
+    seniorAwardsByCapid: groupRowsBy(dataFiles.seniorAwards, 'CAPID'),
+    memberTasksByCapid: groupRowsBy(dataFiles.memberTasks, 'CAPID'),
+    memberPathsByCapid: groupRowsBy(dataFiles.memberPaths, 'CAPID'),
+    seniorLevelsByCapid: groupRowsBy(dataFiles.seniorLevels, 'CAPID'),
+    esMbrAchievementsByCapid: groupRowsBy(dataFiles.esMbrAchievements, 'CAPID'),
+    esMbrTasksByCapid: groupRowsBy(dataFiles.esMbrTasks, 'CAPID'),
+    orgByOrgId: indexRowsBy(dataFiles.organization, 'ORGID'),
+    // Cadet tables
+    cadetRankByCapid: groupRowsBy(dataFiles.cadetRank, 'CAPID'),
+    cadetAchvByCapid: groupRowsBy(dataFiles.cadetAchv, 'CAPID'),
+    cadetAchvAprsByCapid: groupRowsBy(dataFiles.cadetAchvAprs, 'CAPID'),
+    cadetActivitiesByCapid: groupRowsBy(dataFiles.cadetActivities, 'CAPID'),
+    cadetAwardsByCapid: groupRowsBy(dataFiles.cadetAwards, 'CAPID'),
+    cadetDutyByCapid: groupRowsBy(dataFiles.cadetDuty, 'CAPID')
+  };
+
+  _dataIndexCache.set(dataFiles, idx);
+  return idx;
+};
+
+const getConfigIndexes = (configFiles) => {
+  if (!configFiles) return {};
+  const cached = _configIndexCache.get(configFiles);
+  if (cached) return cached;
+
+  const assignmentsByGroupId = groupRowsBy(configFiles.assignments, 'GroupID');
+  const taskIdsByGroupId = new Map();
+  assignmentsByGroupId.forEach((rows, groupId) => {
+    taskIdsByGroupId.set(groupId, new Set(rows.map(a => a.TaskID)));
+  });
+
+  const idx = {
+    groupsByPathId: groupRowsBy(configFiles.groups, 'PathID'),
+    assignmentsByGroupId,
+    taskIdsByGroupId,
+    esAchievementsByAchvId: indexRowsBy(configFiles.esAchievements, 'AchvID'),
+    esAchvStepTasksByAchvId: groupRowsBy(configFiles.esAchvStepTasks, 'AchvID')
+  };
+
+  _configIndexCache.set(configFiles, idx);
+  return idx;
+};
+
 // Parse the AdditionalOptions column from PL_MemberTaskCredit (lightweight, resilient parser)
 const parseAdditionalOptions = (optionsString) => {
   if (!optionsString || typeof optionsString !== 'string') return {};
@@ -1343,6 +1444,19 @@ function createESDataService(rawConfig, rawData) {
   const _rawConfig = rawConfig;
   const _rawData = rawData;
 
+  // esMbrTasks and esMbrAchievements are the largest tables in the payload and
+  // were scanned end to end for every member. Index once, look up per member.
+  const dataIdx = () => getDataIndexes(_rawData);
+  const configIdx = () => getConfigIndexes(_rawConfig);
+  const achievementsFor = (capid) => lookupRows(dataIdx().esMbrAchievementsByCapid, capid);
+  const esTasksFor = (capid) => lookupRows(dataIdx().esMbrTasksByCapid, capid);
+  const achievementDef = (achvId) => lookupRow(configIdx().esAchievementsByAchvId, achvId);
+
+  const hasActiveAchievement = (capid, achvId) => achievementsFor(capid).some(a =>
+    a.AchvID === achvId &&
+    String(a.Status || '').toUpperCase() === 'ACTIVE'
+  );
+
   // ES Helper: Check if member is Skills Evaluator for a qualification
   const checkSkillsEvaluator = (capid, achv, functionalArea, member) => {
     // Skills Evaluator: Member holds qual for 1+ year AND has active SET achievement
@@ -1384,18 +1498,13 @@ function createESDataService(rawConfig, rawData) {
     // SET is AchvID 124 in the ES system
     const SET_ACHV_ID = '124';
 
-    const hasActiveSET = (_rawData.esMbrAchievements || []).some(a =>
-      a.CAPID === capid &&
-      a.AchvID === SET_ACHV_ID &&
-      String(a.Status || '').toUpperCase() === 'ACTIVE'
-    );
+    const hasActiveSET = hasActiveAchievement(capid, SET_ACHV_ID);
 
     if (!hasActiveSET) return false;
 
     // Special requirement for ICUT: Must also be in a communications duty position
     if (achv.AchvID === '217') { // ICUT
-      const memberDuties = (_rawData.duty || [])
-        .filter(d => d.CAPID === capid)
+      const memberDuties = lookupRows(dataIdx().dutyByCapid, capid)
         .map(d => String(d.Duty || '').toUpperCase().trim());
 
       const hasCommDuty = memberDuties.some(duty =>
@@ -1420,13 +1529,11 @@ function createESDataService(rawConfig, rawData) {
     const today = new Date();
 
     // Get member's ES achievements (all statuses)
-    const memberAchievements = (_rawData.esMbrAchievements || [])
-      .filter(a => a.CAPID === capid);
+    const memberAchievements = achievementsFor(capid);
 
     // Build qualification objects with full details
     const qualifications = memberAchievements.map(achv => {
-      const achvDef = (_rawConfig.esAchievements || [])
-        .find(def => def.AchvID === achv.AchvID);
+      const achvDef = achievementDef(achv.AchvID);
 
       if (!achvDef) return null;
 
@@ -1575,7 +1682,7 @@ function createESDataService(rawConfig, rawData) {
 
       // Add GES if missing
       if (!hasGES) {
-        const gesDef = (_rawConfig.esAchievements || []).find(a => a.AchvID === ES_DASHBOARD_SPECIAL.GES);
+        const gesDef = achievementDef(ES_DASHBOARD_SPECIAL.GES);
         if (gesDef) {
           uniqueQualifications.push({
             achvID: ES_DASHBOARD_SPECIAL.GES,
@@ -1600,7 +1707,7 @@ function createESDataService(rawConfig, rawData) {
 
       // Add OPSEC if missing
       if (!hasOPSEC) {
-        const opsecDef = (_rawConfig.esAchievements || []).find(a => a.AchvID === ES_DASHBOARD_SPECIAL.OPSEC);
+        const opsecDef = achievementDef(ES_DASHBOARD_SPECIAL.OPSEC);
         if (opsecDef) {
           uniqueQualifications.push({
             achvID: ES_DASHBOARD_SPECIAL.OPSEC,
@@ -1640,8 +1747,7 @@ function createESDataService(rawConfig, rawData) {
   const buildESPrerequisiteTree = (achvID, ancestry = []) => {
     const buildNode = (currentAchvID, currentAncestry = []) => {
       // Get achievement definition
-      const achvDef = (_rawConfig.esAchievements || [])
-        .find(a => a.AchvID === currentAchvID);
+      const achvDef = achievementDef(currentAchvID);
 
       if (!achvDef) return null;
 
@@ -1766,12 +1872,10 @@ function createESDataService(rawConfig, rawData) {
     const targetCAPID = String(capid || '').trim();
 
     // Get all task links for this achievement
-    const taskLinks = (_rawConfig.esAchvStepTasks || [])
-      .filter(link => String(link.AchvID || '').trim() === targetAchvID);
+    const taskLinks = lookupRows(configIdx().esAchvStepTasksByAchvId, targetAchvID);
 
     // Get member's completed tasks
-    const memberTasks = (_rawData.esMbrTasks || [])
-      .filter(t => String(t.CAPID || '').trim() === targetCAPID);
+    const memberTasks = esTasksFor(targetCAPID);
 
     // Group by StepID
     const stepMap = {};
@@ -1860,17 +1964,11 @@ function createESDataService(rawConfig, rawData) {
     specialCase.specialPrereqs.forEach(prereq => {
       if (prereq.type === 'OR') {
         // OR logic: Member needs at least ONE of the options
-        const hasAny = prereq.options.some(optionID =>
-          (_rawData.esMbrAchievements || []).some(a =>
-            a.CAPID === capid &&
-            a.AchvID === optionID &&
-            String(a.Status || '').toUpperCase() === 'ACTIVE'
-          )
-        );
+        const hasAny = prereq.options.some(optionID => hasActiveAchievement(capid, optionID));
         if (!hasAny) {
           // Get names of the options for display
           const optionNames = prereq.options.map(optID => {
-            const achvDef = (_rawConfig.esAchievements || []).find(a => a.AchvID === optID);
+            const achvDef = achievementDef(optID);
             return achvDef ? achvDef.Achv : optID;
           });
           missing.push(`One of: ${optionNames.join(' OR ')}`);
@@ -1912,11 +2010,7 @@ function createESDataService(rawConfig, rawData) {
           }
         } else {
           // For cadets, check Achievement 1 (Curry) in esMbrAchievements
-          hasRequired = (_rawData.esMbrAchievements || []).some(a =>
-            a.CAPID === capid &&
-            a.AchvID === requiredAchvID &&
-            String(a.Status || '').toUpperCase() === 'ACTIVE'
-          );
+          hasRequired = hasActiveAchievement(capid, requiredAchvID);
         }
 
         if (!hasRequired) {
@@ -1929,16 +2023,14 @@ function createESDataService(rawConfig, rawData) {
       } else if (prereq.type === 'TASK') {
         // Task requirement: Member must have completed a specific task
         // Check both general member tasks (PL_MemberTaskCredit) and ES member tasks (MbrTasks)
-        let hasTask = (_rawData.memberTasks || []).some(mt =>
-          mt.CAPID === capid &&
+        let hasTask = lookupRows(dataIdx().memberTasksByCapid, capid).some(mt =>
           mt.TaskID === prereq.taskID &&
           mt.StatusID === '8' // Completed/Active
         );
 
         // Also check ES member tasks (esMbrTasks) for ES-specific tasks
         if (!hasTask) {
-          hasTask = (_rawData.esMbrTasks || []).some(mt =>
-            String(mt.CAPID || '').trim() === String(capid || '').trim() &&
+          hasTask = esTasksFor(capid).some(mt =>
             String(mt.TaskID || '').trim() === String(prereq.taskID || '').trim() &&
             String(mt.Status || '').toUpperCase() === 'ACTIVE'
           );
@@ -1946,11 +2038,7 @@ function createESDataService(rawConfig, rawData) {
 
         // Special case: ICS 100 requirement (TaskID 131) can also be satisfied by IS-100 course (AchvID 176)
         if (!hasTask && prereq.taskID === '131') {
-          const hasIS100 = (_rawData.esMbrAchievements || []).some(a =>
-            a.CAPID === capid &&
-            a.AchvID === '176' && // IS-100 achievement ID
-            String(a.Status || '').toUpperCase() === 'ACTIVE'
-          );
+          const hasIS100 = hasActiveAchievement(capid, '176'); // IS-100 achievement
           hasTask = hasIS100;
         }
 
@@ -1968,21 +2056,11 @@ function createESDataService(rawConfig, rawData) {
       } else if (prereq.type === 'OR_WITH_CROSS_TRAINING') {
         // Complex OR: One of the options plus cross-training requirements
         const hasAny = prereq.options.some(option => {
-          const hasMain = (_rawData.esMbrAchievements || []).some(a =>
-            a.CAPID === capid &&
-            a.AchvID === option.achvID &&
-            String(a.Status || '').toUpperCase() === 'ACTIVE'
-          );
+          const hasMain = hasActiveAchievement(capid, option.achvID);
           if (!hasMain) return false;
 
           // Check cross-training requirements
-          const hasCrossTraining = option.crossTraining.some(ctID =>
-            (_rawData.esMbrAchievements || []).some(a =>
-              a.CAPID === capid &&
-              a.AchvID === ctID &&
-              String(a.Status || '').toUpperCase() === 'ACTIVE'
-            )
-          );
+          const hasCrossTraining = option.crossTraining.some(ctID => hasActiveAchievement(capid, ctID));
           return hasCrossTraining;
         });
         if (!hasAny) {
@@ -2084,11 +2162,7 @@ function createESDataService(rawConfig, rawData) {
           }
         } else {
           // For cadets, check Achievement 1 in esMbrAchievements
-          const hasAchv1 = (_rawData.esMbrAchievements || []).some(a =>
-            a.CAPID === capid &&
-            a.AchvID === '95' &&
-            String(a.Status || '').toUpperCase() === 'ACTIVE'
-          );
+          const hasAchv1 = hasActiveAchievement(capid, '95');
 
           if (!hasAchv1 && node.achvID !== achvID) {
             return { eligible: false, missing: ['Achievement 1 (Curry)'] };
@@ -2096,11 +2170,7 @@ function createESDataService(rawConfig, rawData) {
         }
       } else {
         // Regular achievement checking
-        const hasQual = (_rawData.esMbrAchievements || []).some(a =>
-          a.CAPID === capid &&
-          a.AchvID === node.achvID &&
-          String(a.Status || '').toUpperCase() === 'ACTIVE'
-        );
+        const hasQual = hasActiveAchievement(capid, node.achvID);
 
         if (!hasQual && node.achvID !== achvID) {
           return { eligible: false, missing: [node.name] };
@@ -2165,6 +2235,10 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
   const _rawData = rawData;
   const _esDataService = esDataService;
 
+  // Per-member lookups against tables indexed once (see UtilsDataParsing)
+  const dataIdx = () => getDataIndexes(_rawData);
+  const configIdx = () => getConfigIndexes(_rawConfig);
+
   // Helper: Get active members for an org (or multiple orgs)
   // Includes seniors and cadets with ES qualifications, excludes Patrons and Cadet Sponsors
   const getMembersForOrg = (orgId, options = {}) => {
@@ -2193,12 +2267,11 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
 
   // Helper: Get all ES qualifications for a member (active only)
   const getMemberActiveQuals = (capid) => {
-    return (_rawData.esMbrAchievements || []).filter(a =>
-      a.CAPID === capid &&
+    return lookupRows(dataIdx().esMbrAchievementsByCapid, capid).filter(a =>
       String(a.Status || '').toUpperCase() === 'ACTIVE' &&
       !ES_EXCLUDED_ACHIEVEMENT_IDS.has(a.AchvID) &&
       !ES_EXCLUDED_FUNCTIONAL_AREAS.has(
-        (_rawConfig.esAchievements || []).find(def => def.AchvID === a.AchvID)?.FunctionalArea
+        lookupRow(configIdx().esAchievementsByAchvId, a.AchvID)?.FunctionalArea
       )
     );
   };
@@ -2206,11 +2279,10 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
   // Helper: Get all ES qualifications for a member (any status)
   // Deduplicates so each AchvID appears only once with the most relevant status
   const getMemberAllQuals = (capid) => {
-    const rawQuals = (_rawData.esMbrAchievements || []).filter(a =>
-      a.CAPID === capid &&
+    const rawQuals = lookupRows(dataIdx().esMbrAchievementsByCapid, capid).filter(a =>
       !ES_EXCLUDED_ACHIEVEMENT_IDS.has(a.AchvID) &&
       !ES_EXCLUDED_FUNCTIONAL_AREAS.has(
-        (_rawConfig.esAchievements || []).find(def => def.AchvID === a.AchvID)?.FunctionalArea
+        lookupRow(configIdx().esAchievementsByAchvId, a.AchvID)?.FunctionalArea
       )
     );
 
@@ -3607,22 +3679,24 @@ const determineLevel2Track = (memberTasks = []) => {
 
 const calculateLevelsProgress = (member, configFiles, dataFiles, levelPathMap) => {
   const progress = {};
-  const memberTasks = (dataFiles.memberTasks || []).filter(mt => mt.CAPID === member.CAPID);
-  const memberPaths = (dataFiles.memberPaths || []).filter(mp => mp.CAPID === member.CAPID);
-  const memberLegacyLevels = (dataFiles.seniorLevels || []).filter(sl => sl.CAPID === member.CAPID);
+  const dataIdx = getDataIndexes(dataFiles);
+  const configIdx = getConfigIndexes(configFiles);
+  const memberTasks = lookupRows(dataIdx.memberTasksByCapid, member.CAPID);
+  const memberPaths = lookupRows(dataIdx.memberPathsByCapid, member.CAPID);
+  const memberLegacyLevels = lookupRows(dataIdx.seniorLevelsByCapid, member.CAPID);
 
   LEVELS.forEach(def => {
     const pathId = levelPathMap[def.id];
     let totalReq = 0, totalComp = 0;
 
     if (pathId && (configFiles.groups || []).length > 0) {
-      const groups = (configFiles.groups || []).filter(g => g.PathID === pathId);
+      const groups = lookupRows(configIdx.groupsByPathId, pathId);
       groups.forEach(group => {
         const req = parseInt(group.NumberOfRequiredTasks) || 0;
         if (req === 0) return;
         totalReq += req;
-        const groupTaskIds = (configFiles.assignments || []).filter(a => a.GroupID === group.GroupID).map(a => a.TaskID);
-        const comp = memberTasks.filter(mt => groupTaskIds.includes(mt.TaskID) && mt.StatusID === "8").length;
+        const groupTaskIds = configIdx.taskIdsByGroupId.get(indexKey(group.GroupID)) || new Set();
+        const comp = memberTasks.filter(mt => groupTaskIds.has(mt.TaskID) && mt.StatusID === "8").length;
         totalComp += Math.min(comp, req);
       });
     }
@@ -3818,12 +3892,11 @@ function createDataService() {
     return { levelsProgress: progress, highestLevel: currentLevel };
   };
 
-  const buildTracks = (member) => (_rawData.tracks || [])
-    .filter(t => t.CAPID === member.CAPID)
+  const buildTracks = (member) => lookupRows(getDataIndexes(_rawData).tracksByCapid, member.CAPID)
     .map(t => ({ name: t.Track, level: t.TrackLevel, date: t.DateMod }));
 
-  const buildSeniorAwards = (member) => (_rawData.seniorAwards || [])
-    .filter(a => a.CAPID === member.CAPID && a.Completed && a.Completed !== '01/01/1900')
+  const buildSeniorAwards = (member) => lookupRows(getDataIndexes(_rawData).seniorAwardsByCapid, member.CAPID)
+    .filter(a => a.Completed && a.Completed !== '01/01/1900')
     .map(a => ({
       award: a.Award,
       awardNo: a.AwardNo,
@@ -3832,10 +3905,9 @@ function createDataService() {
       dateMod: a.DateMod
     }));
 
-  const buildDuties = (member) => (_rawData.duty || [])
-    .filter(d => d.CAPID === member.CAPID)
+  const buildDuties = (member) => lookupRows(getDataIndexes(_rawData).dutyByCapid, member.CAPID)
     .map(d => {
-      const org = (_rawData.organization || []).find(o => o.ORGID === d.ORGID);
+      const org = lookupRow(getDataIndexes(_rawData).orgByOrgId, d.ORGID);
       const orgString = org ? `${org.Region}-${org.Wing}-${org.Unit}` : "Unknown";
       return {
         name: d.Duty,
@@ -3892,14 +3964,15 @@ function createDataService() {
       const isActive = status === "ACTIVE";
       return isSenior && isActive && validOrgSet.has(String(m.ORGID || "").trim());
     });
+    const dataIdx = getDataIndexes(_rawData);
     return membersInScope.map(member => {
-      const org = (_rawData.organization || []).find(o => o.ORGID === member.ORGID);
+      const org = lookupRow(dataIdx.orgByOrgId, member.ORGID);
       const memberUnitName = buildUnitName(org);
       const duties = buildDuties(member);
       const tracks = buildTracks(member);
       const { dutiesWithStatus, tracksWithStatus } = applyDutyTrackWarnings(duties, tracks);
       const { levelsProgress, highestLevel } = buildLevelsProgress(member);
-      const level2Track = determineLevel2Track((_rawData.memberTasks || []).filter(mt => mt.CAPID === member.CAPID));
+      const level2Track = determineLevel2Track(lookupRows(dataIdx.memberTasksByCapid, member.CAPID));
       const seniorAwards = buildSeniorAwards(member);
       const esQualifications = _esService.buildESQualifications(member, { forDashboard: true, forSenior: true });
       const esQualificationsAll = _esService.buildESQualifications(member, { forDashboard: false, forSenior: true });
@@ -3953,6 +4026,9 @@ function createCadetDataService() {
   };
   let _esService = null;
 
+  // Per-cadet lookups against tables indexed once (see UtilsDataParsing)
+  const dataIdx = () => getDataIndexes(_rawData);
+
   const parsePayload = (payload) => {
     // Accept already-parsed data from dataFiles (not raw CSV strings)
     _rawData = {
@@ -3987,22 +4063,23 @@ function createCadetDataService() {
   };
 
   const getCurrentRank = (capid) => {
-    const ranks = _rawData.cadetRank.filter(r => r.CAPID === capid);
+    // Copy before sorting - the index owns the underlying bucket
+    const ranks = lookupRows(dataIdx().cadetRankByCapid, capid).slice();
     if (!ranks.length) return null;
     ranks.sort((a, b) => new Date(b.RankDate) - new Date(a.RankDate));
     return ranks[0];
   };
 
   const getApprovedAchievements = (capid) => {
-    return _rawData.cadetAchvAprs
-      .filter(a => a.CAPID === capid && a.Status === 'APR')
+    return lookupRows(dataIdx().cadetAchvAprsByCapid, capid)
+      .filter(a => a.Status === 'APR')
       .map(a => parseInt(a.CadetAchvID))
       .sort((a, b) => a - b);
   };
 
   const getAchievementApprovalDate = (capid, achievementId) => {
-    const approval = _rawData.cadetAchvAprs.find(
-      a => a.CAPID === capid && parseInt(a.CadetAchvID) === achievementId && a.Status === 'APR'
+    const approval = lookupRows(dataIdx().cadetAchvAprsByCapid, capid).find(
+      a => parseInt(a.CadetAchvID) === achievementId && a.Status === 'APR'
     );
     return approval ? approval.DateMod : null;
   };
@@ -4133,8 +4210,8 @@ function createCadetDataService() {
   };
 
   const checkEncampment = (capid) => {
-    const encampments = _rawData.cadetActivities.filter(a =>
-      a.CAPID === capid && a.Type === 'ENCAMP' && a.Completed && a.Completed !== '01/01/1900'
+    const encampments = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a =>
+      a.Type === 'ENCAMP' && a.Completed && a.Completed !== '01/01/1900'
     );
     return {
       completed: encampments.length > 0,
@@ -4145,10 +4222,10 @@ function createCadetDataService() {
 
   const checkCLS = (capid) => {
     const clsTypes = ['RCLS', 'COS', 'COS STAFF'];
-    const activities = _rawData.cadetActivities.filter(a => {
+    const activities = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a => {
       const activityType = String(a.Type || '').toUpperCase();
       const isCLS = clsTypes.includes(activityType) || activityType.startsWith('COS');
-      return a.CAPID === capid && isCLS && a.Completed && a.Completed !== '01/01/1900';
+      return isCLS && a.Completed && a.Completed !== '01/01/1900';
     });
     return {
       completed: activities.length > 0,
@@ -4157,12 +4234,12 @@ function createCadetDataService() {
   };
 
   const getAchievementRequirements = (capid, achievementID, timeInGrade = null) => {
-    const achvData = _rawData.cadetAchv.find(a => a.CAPID === capid && a.CadetAchvID === achievementID);
+    const achvData = lookupRows(dataIdx().cadetAchvByCapid, capid).find(a => a.CadetAchvID === achievementID);
 
     // Helper function to check if a PL task is completed
     const isTaskCompleted = (taskId) => {
-      return _rawData.memberTasks.some(mt =>
-        mt.CAPID === capid && mt.TaskID === taskId && mt.StatusID === "8"
+      return lookupRows(dataIdx().memberTasksByCapid, capid).some(mt =>
+        mt.TaskID === taskId && mt.StatusID === "8"
       );
     };
 
@@ -4665,12 +4742,12 @@ function createCadetDataService() {
       return { earned: false, reason: 'Extra credit not earned' };
     }
 
-    const achvData = _rawData.cadetAchv.find(a => a.CAPID === capid && a.CadetAchvID === achievementID);
+    const achvData = lookupRows(dataIdx().cadetAchvByCapid, capid).find(a => a.CadetAchvID === achievementID);
 
     // Helper function to check if a PL task is completed
     const isTaskCompleted = (taskId) => {
-      return _rawData.memberTasks.some(mt =>
-        mt.CAPID === capid && mt.TaskID === taskId && mt.StatusID === "8"
+      return lookupRows(dataIdx().memberTasksByCapid, capid).some(mt =>
+        mt.TaskID === taskId && mt.StatusID === "8"
       );
     };
 
@@ -4749,8 +4826,8 @@ function createCadetDataService() {
   };
 
   const getMilestoneAwards = (capid) => {
-    return _rawData.cadetAwards
-      .filter(a => a.CAPID === capid && a.Completed && a.Completed !== '01/01/1900')
+    return lookupRows(dataIdx().cadetAwardsByCapid, capid)
+      .filter(a => a.Completed && a.Completed !== '01/01/1900')
       .map(a => ({ award: a.Award, awardNo: a.AwardNo, completed: a.Completed }));
   };
 
@@ -4843,10 +4920,10 @@ function createCadetDataService() {
 
       // Get cadet duty positions
       const cadetDuties = _rawData.cadetDuty
-        ? _rawData.cadetDuty
-            .filter(d => d.CAPID === cadet.CAPID && d.Duty && !d.Duty.toUpperCase().includes('#REF'))
+        ? lookupRows(dataIdx().cadetDutyByCapid, cadet.CAPID)
+            .filter(d => d.Duty && !d.Duty.toUpperCase().includes('#REF'))
             .map(d => {
-              const org = _rawData.organization.find(o => o.ORGID === d.ORGID);
+              const org = lookupRow(dataIdx().orgByOrgId, d.ORGID);
               const orgString = org ? `${org.Region}-${org.Wing}-${org.Unit ? org.Unit.replace(/^0+/, '').padStart(3,'0') : '000'}` : "Unknown";
               return { name: d.Duty, date: d.DateMod, orgString };
             })
@@ -20320,6 +20397,49 @@ window.importCapwatchZip = async function(file, onProgress) {
 
       const { useState, useMemo, useEffect, useCallback } = React;
 
+      // CAP echelons, highest headquarters first. Squadrons and flights share
+      // the bottom rank because the unit picker nests them under their group
+      // rather than separating them by unit type.
+      const UNIT_ECHELONS = ['NATIONAL', 'REGION', 'WING', 'GROUP', 'SQUADRON'];
+
+      // Organization.Type carries the echelon as free text ("COMPOSITE
+      // SQUADRON", "GROUP", "WING"), which is how the rest of the app reads it.
+      const getUnitEchelon = (type) => {
+        const t = String(type || '').toUpperCase();
+        if (t.includes('NATIONAL')) return 'NATIONAL';
+        if (t.includes('REGION')) return 'REGION';
+        if (t.includes('WING')) return 'WING';
+        if (t.includes('GROUP')) return 'GROUP';
+        return 'SQUADRON';
+      };
+
+      // Unit numbers arrive zero-padded inconsistently ("4", "004", "0004").
+      const padUnitNum = (value) => {
+        const raw = String(value || '').trim();
+        return raw ? raw.replace(/^0+/, '').padStart(3, '0') : '';
+      };
+
+      // California Wing units go by a local number that is not their national
+      // charter: charter 110 is "Squadron 80", charter 188 is "Group 2". That
+      // local number is the trailing integer in Organization.Name, after the
+      // unit-type word - "SAN JOSE SENIOR SQDN 80", "SAN FRANCISCO BAY GROUP 2".
+      // It drives the dropdown's sort order; the name itself is what shows.
+      //
+      // Anchored to the end and to a unit-type keyword so it does not grab a
+      // number embedded elsewhere in a name, and so units that carry no local
+      // number ("45TH COMPOSITE SQUADRON", "CALIFORNIA WING HQ") return null
+      // and sort after the numbered ones. Wings without this convention simply
+      // never match, so the parser is safe to run everywhere.
+      const getLocalDesignation = (name) => {
+        const m = String(name || '').match(/\b(?:SQ|SQD|SQDN|SQUADRON|GP|GROUP|FLT|FLIGHT)\.?\s*#?\s*(\d+)\s*$/i);
+        return m ? parseInt(m[1], 10) : null;
+      };
+
+      // CAPWATCH stores unit names in all-caps; render them the way people
+      // write them. Leaves digit-led tokens alone ("45TH" stays "45th").
+      const toTitleCase = (name) =>
+        String(name || '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
       function App() {
         const [activeTab, setActiveTab] = useState('home');
         const [showReference, setShowReference] = useState(false);
@@ -20552,37 +20672,198 @@ window.importCapwatchZip = async function(file, onProgress) {
            return results;
         };
 
-        const availableUnits = useMemo(() => {
-          if (!dataFiles.members.length) return [];
-          const units = new Map();
+        // Builds the unit picker as an echelon tree: headquarters first, then
+        // one section per group holding that group and its squadrons, then any
+        // unit reporting straight to the wing.
+        //
+        // The list is driven by Organization rather than by member unit
+        // numbers. The old member-driven build could only name the echelons it
+        // wanted to hide, and hid the wing and one group by hard-coded unit
+        // number ('000' and '004') - which left the wing unselectable even
+        // though wing scope is what most of the app branches on.
+        const unitPicker = useMemo(() => {
+          const members = dataFiles.members || [];
+          if (!members.length) return { units: [], optionGroups: [] };
 
-          dataFiles.members.forEach(m => {
-            if (m.ORGID && m.Unit && !isNaN(parseInt(m.Unit)) && /^\d+$/.test(m.Unit.trim())) {
-               const cleanUnit = m.Unit.replace(/^0+/, '').padStart(3, '0');
-               if (cleanUnit === '000' || cleanUnit === '004') return;
-               if(!units.has(m.ORGID)){
-                  units.set(m.ORGID, { id: m.ORGID, unitNum: cleanUnit, name: `Unit ${cleanUnit}` });
-               }
-            }
+          const orgById = new Map();
+          (dataFiles.organization || []).forEach(o => {
+            orgById.set(String(o.ORGID || '').trim(), o);
           });
 
-          if(dataFiles.organization.length){
-             dataFiles.organization.forEach(o => {
-                if(units.has(o.ORGID)) {
-                   const entry = units.get(o.ORGID);
-                   const cleanUnit = o.Unit ? o.Unit.replace(/^0+/, '').padStart(3, '0') : entry.unitNum;
-                   entry.name = `${o.Region}-${o.Wing}-${cleanUnit} ${o.Name}`;
-                   entry.unitNum = cleanUnit;
-                }
-             });
-          }
+          // A unit with no members is noise in the picker. Members also carry
+          // their own unit number, which is the only identity available when
+          // an org is missing from the Organization table.
+          const populated = new Set();
+          const memberUnitNum = new Map();
+          members.forEach(m => {
+            const orgId = String(m.ORGID || '').trim();
+            if (!orgId) return;
+            populated.add(orgId);
+            if (memberUnitNum.has(orgId)) return;
+            const rawUnit = String(m.Unit || '').trim();
+            if (/^\d+$/.test(rawUnit)) memberUnitNum.set(orgId, padUnitNum(rawUnit));
+          });
 
-          return Array.from(units.values()).sort((a, b) => parseInt(a.unitNum) - parseInt(b.unitNum));
+          const entryFor = (orgId) => {
+            const org = orgById.get(orgId);
+            const unitNum = padUnitNum(org.Unit) || memberUnitNum.get(orgId) || '';
+            const echelon = getUnitEchelon(org.Type);
+            const localNum = getLocalDesignation(org.Name);
+            const charterLabel = `${org.Region || ''}-${org.Wing || ''}-${unitNum}`;
+            const titleName = toTitleCase(org.Name);
+            return {
+              // Keep ORGID verbatim: this is the value the rest of the app
+              // compares unitFilter against, sometimes without trimming.
+              id: org.ORGID,
+              orgId: orgId,
+              unitNum: unitNum,
+              localNum: localNum,
+              titleName: titleName,
+              // The full unit name people know, charter kept in parens for
+              // lookup. Sort order comes from localNum, not this text.
+              label: titleName ? `${titleName} (${charterLabel})` : charterLabel,
+              echelon: echelon,
+              parentId: String(org.NextLevel || '').trim()
+            };
+          };
+
+          // Only units that actually have members. A wing-scoped extract still
+          // carries the region and national org records above the wing, and
+          // pulling those in as ancestors offered echelons whose data is not
+          // in the download - a region entry would show one wing's numbers
+          // labelled as the region's. Groups needed purely to nest a squadron
+          // under are added back below.
+          const entryById = new Map();
+          populated.forEach(orgId => {
+            if (orgById.has(orgId)) entryById.set(orgId, entryFor(orgId));
+          });
+
+          // Units whose org record is missing entirely: keep them selectable
+          // under their member-reported number rather than dropping them.
+          populated.forEach(orgId => {
+            if (orgById.has(orgId)) return;
+            const unitNum = memberUnitNum.get(orgId);
+            if (!unitNum) return;
+            entryById.set(orgId, {
+              id: orgId,
+              orgId: orgId,
+              unitNum: unitNum,
+              localNum: null,
+              titleName: `Unit ${unitNum}`,
+              label: `Unit ${unitNum}`,
+              echelon: 'SQUADRON',
+              parentId: ''
+            });
+          });
+
+          // Nearest group ancestor, so a squadron sitting under a flight still
+          // lands in the right group section. Returns '' for units that report
+          // to the wing (or higher) without passing through a group.
+          const groupIdFor = (entry) => {
+            let curr = entry.parentId;
+            const seen = new Set([entry.orgId]);
+            while (curr && !seen.has(curr) && orgById.has(curr)) {
+              seen.add(curr);
+              const org = orgById.get(curr);
+              const echelon = getUnitEchelon(org.Type);
+              if (echelon === 'GROUP') return curr;
+              if (echelon !== 'SQUADRON') return '';
+              curr = String(org.NextLevel || '').trim();
+            }
+            return '';
+          };
+
+          // Order by the local designation people actually use. Units that
+          // carry one sort first, in that order; units without one (HQ, the
+          // odd name that hides its number up front) fall in after, by charter.
+          const byUnitNum = (a, b) => {
+            if (a.localNum != null && b.localNum != null) return a.localNum - b.localNum;
+            if (a.localNum != null) return -1;
+            if (b.localNum != null) return 1;
+            const an = parseInt(a.unitNum, 10);
+            const bn = parseInt(b.unitNum, 10);
+            if (isNaN(an) && isNaN(bn)) return a.label.localeCompare(b.label);
+            if (isNaN(an)) return 1;
+            if (isNaN(bn)) return -1;
+            return an - bn;
+          };
+
+          // A group with no members of its own still has to appear once one of
+          // its squadrons does, or the squadron has nothing to nest under and
+          // reads as reporting straight to the wing. It stays selectable:
+          // unlike a region in a wing extract, its subordinate data is all
+          // here, so a group rollup with Include Sub-Units is real.
+          Array.from(entryById.values())
+            .filter(e => e.echelon === 'SQUADRON')
+            .forEach(e => {
+              const groupId = groupIdFor(e);
+              if (groupId && !entryById.has(groupId)) entryById.set(groupId, entryFor(groupId));
+            });
+
+          const entries = Array.from(entryById.values());
+          const headquarters = entries
+            .filter(e => e.echelon !== 'GROUP' && e.echelon !== 'SQUADRON')
+            .sort((a, b) => UNIT_ECHELONS.indexOf(a.echelon) - UNIT_ECHELONS.indexOf(b.echelon) || byUnitNum(a, b));
+          const groups = entries.filter(e => e.echelon === 'GROUP').sort(byUnitNum);
+
+          const squadronsByGroup = new Map();
+          const directReporting = [];
+          entries.filter(e => e.echelon === 'SQUADRON').forEach(e => {
+            const groupId = groupIdFor(e);
+            if (groupId && entryById.has(groupId)) {
+              if (!squadronsByGroup.has(groupId)) squadronsByGroup.set(groupId, []);
+              squadronsByGroup.get(groupId).push(e);
+            } else {
+              directReporting.push(e);
+            }
+          });
+          squadronsByGroup.forEach(list => list.sort(byUnitNum));
+          directReporting.sort(byUnitNum);
+
+          // A native <select> only nests one level deep, so the squadrons are
+          // indented inside their group's <optgroup> rather than nested again.
+          // Non-breaking: browsers collapse leading whitespace in a label.
+          const INDENT = '    ';
+          const units = [];
+          const optionGroups = [];
+          const addSection = (key, label, sectionEntries, indentEntries) => {
+            if (!sectionEntries.length) return;
+            optionGroups.push({
+              key: key,
+              label: label,
+              options: sectionEntries.map(e => ({
+                id: e.id,
+                label: (indentEntries && indentEntries.has(e) ? INDENT : '') + e.label
+              }))
+            });
+            sectionEntries.forEach(e => units.push(e));
+          };
+
+          addSection('hq', null, headquarters, null);
+          groups.forEach(group => {
+            const squadrons = squadronsByGroup.get(group.orgId) || [];
+            addSection(
+              `group-${group.orgId}`,
+              group.titleName || group.label,
+              [group].concat(squadrons),
+              new Set(squadrons)
+            );
+          });
+          // Without groups there is nothing to distinguish these from, so the
+          // section header would just be a label over the whole list.
+          addSection('direct', groups.length ? 'Direct Reporting Units' : null, directReporting, null);
+
+          return { units: units, optionGroups: optionGroups };
         }, [dataFiles.members, dataFiles.organization]);
 
-        useEffect(() => { 
+        const availableUnits = unitPicker.units;
+        const unitOptionGroups = unitPicker.optionGroups;
+
+        useEffect(() => {
+            // First entry is now the highest echelon in the data (the wing for
+            // a wing-scoped extract) rather than the lowest-numbered squadron.
             if (!unitFilter && availableUnits.length > 0) {
-                setUnitFilter(availableUnits[0].id); 
+                setUnitFilter(availableUnits[0].id);
             }
         }, [availableUnits]);
 
@@ -20612,9 +20893,9 @@ window.importCapwatchZip = async function(file, onProgress) {
           if (!member) return null;
           const id = member.CAPID;
 
-          const rawDuties = dataFiles.duty.filter(d => d.CAPID === id);
+          const rawDuties = lookupRows(getDataIndexes(dataFiles).dutyByCapid, id);
           const duties = rawDuties.map(d => {
-              const org = dataFiles.organization.find(o => o.ORGID === d.ORGID);
+              const org = lookupRow(getDataIndexes(dataFiles).orgByOrgId, d.ORGID);
               const orgString = org ? `${org.Region}-${org.Wing}-${org.Unit}` : "Unknown";
               return { 
                   name: d.Duty, 
@@ -20624,7 +20905,7 @@ window.importCapwatchZip = async function(file, onProgress) {
                   displayName: `${d.Duty}${d.Asst === "1" ? " (A)" : ""}` 
               };
           });
-          const rawTracks = dataFiles.tracks.filter(t => t.CAPID === id);
+          const rawTracks = lookupRows(getDataIndexes(dataFiles).tracksByCapid, id);
           const tracks = rawTracks.map(t => ({ name: t.Track, level: t.TrackLevel, date: t.DateMod }));
           
           const dutiesWithStatus = duties.map(duty => {
@@ -20656,11 +20937,11 @@ window.importCapwatchZip = async function(file, onProgress) {
           });
 
           const { progress: levelsProgress, currentLevel: highestLevel } = calculateLevelsProgress(member, configFiles, dataFiles, levelPathMap);
-          const level2Track = determineLevel2Track(dataFiles.memberTasks ? dataFiles.memberTasks.filter(mt => mt.CAPID === id) : []);
+          const level2Track = determineLevel2Track(lookupRows(getDataIndexes(dataFiles).memberTasksByCapid, id));
 
           let memberUnitName = "Unknown";
           if (dataFiles.organization) {
-              const memOrg = dataFiles.organization.find(o => o.ORGID === member.ORGID);
+              const memOrg = lookupRow(getDataIndexes(dataFiles).orgByOrgId, member.ORGID);
               if (memOrg) {
                   const r = memOrg.Region || "";
                   const w = memOrg.Wing || "";
@@ -20866,8 +21147,9 @@ window.importCapwatchZip = async function(file, onProgress) {
         const getLevelBreakdown = (member, levelKey) => {
           const pathId = levelPathMap[levelKey];
           if (!pathId) return null;
-          const chosenTrack = member.level2Track || determineLevel2Track(dataFiles.memberTasks ? dataFiles.memberTasks.filter(mt => mt.CAPID === member.CAPID) : []);
-          const groups = configFiles.groups.filter(g => g.PathID === pathId);
+          const memberTaskRows = lookupRows(getDataIndexes(dataFiles).memberTasksByCapid, member.CAPID);
+          const chosenTrack = member.level2Track || determineLevel2Track(memberTaskRows);
+          const groups = lookupRows(getConfigIndexes(configFiles).groupsByPathId, pathId);
           const validGroups = groups.filter(g => (parseInt(g.NumberOfRequiredTasks)||0) > 0);
 
           const mappedGroups = validGroups.map(group => {
@@ -20875,7 +21157,7 @@ window.importCapwatchZip = async function(file, onProgress) {
             let tasks = taskAssignments.map(ta => {
               const taskDef = configFiles.tasks.find(t => t.TaskID === ta.TaskID);
               if (!taskDef) return null;
-              const isDone = dataFiles.memberTasks.some(mt => mt.CAPID === member.CAPID && mt.TaskID === ta.TaskID && mt.StatusID === "8");
+              const isDone = memberTaskRows.some(mt => mt.TaskID === ta.TaskID && mt.StatusID === "8");
               const appliesTo = LEVEL2_TASK_TRACKS[taskDef.TaskID] || ["ALL"];
               return { ...taskDef, isDone, appliesTo };
             }).filter(Boolean);
@@ -21126,6 +21408,16 @@ window.importCapwatchZip = async function(file, onProgress) {
           };
 
           const dutyRecords = (dataFiles.duty || []).filter(d => String(d.CAPID || '').trim() === capid);
+          // Positions that must hold the Advanced Course, per CAPR 60-2
+          // (18 August 2025) para 3.3.1: commander, deputy commander (group or
+          // higher), deputy commander for cadets, chief of staff, director of
+          // cadet programs, legal officer and inspector general - plus
+          // encampment commanders, commandants of cadets, and NCSA directors
+          // and deputies.
+          //
+          // The echelon qualifier belongs to deputy commander alone; chief of
+          // staff and director of cadet programs carry none. The summary page
+          // at GoCivilAirPatrol.com/CPP words this differently - the reg wins.
           const advancedRequired = isSenior && dutyRecords.some(duty => {
             const dutyName = String(duty.Duty || '').toUpperCase().replace(/\s+/g, ' ').trim();
             if (!dutyName) return false;
@@ -21135,7 +21427,8 @@ window.importCapwatchZip = async function(file, onProgress) {
               'GROUP COMMANDER',
               'WING COMMANDER',
               'REGION COMMANDER',
-              'UNIT COMMANDER'
+              'UNIT COMMANDER',
+              'ENCAMPMENT COMMANDER'
             ];
             const isCommander = commanderTitles.includes(dutyName);
             const isDeputyCommanderGroupPlus = dutyName.includes('DEPUTY COMMANDER') && isGroupOrHigher(duty.ORGID);
@@ -21144,6 +21437,9 @@ window.importCapwatchZip = async function(file, onProgress) {
             const isChiefOfStaff = dutyName.includes('CHIEF OF STAFF');
             const isLegalOfficer = dutyName.includes('LEGAL OFFICER');
             const isInspectorGeneral = dutyName.includes('INSPECTOR GENERAL');
+            const isCommandantOfCadets = dutyName.includes('COMMANDANT');
+            const isNcsaDirectorOrDeputy = dutyName.includes('NCSA')
+              && (dutyName.includes('DIRECTOR') || dutyName.includes('DEPUTY'));
             return (
               isCommander ||
               isDeputyCommanderGroupPlus ||
@@ -21151,14 +21447,29 @@ window.importCapwatchZip = async function(file, onProgress) {
               isDirectorCadetPrograms ||
               isChiefOfStaff ||
               isLegalOfficer ||
-              isInspectorGeneral
+              isInspectorGeneral ||
+              isCommandantOfCadets ||
+              isNcsaDirectorOrDeputy
             );
           });
 
           const completion = trainingIndex.get(capid) || {};
-          const effectiveBasicRequired = basicRequired && !advancedRequired;
-          const effectiveBasicEligible = basicEligible && !advancedRequired;
           const now = new Date();
+          const isWithinRenewal = (date) => {
+            if (!date) return false;
+            const expires = new Date(date);
+            expires.setDate(expires.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
+            return expires >= now;
+          };
+          // CAPR 60-2 para 3.2.4: members who complete the Advanced Course "may
+          // renew that credential in lieu of renewing their Basic Course
+          // credential", and para 3.3.2 lets them do so "to maintain Cadet
+          // Protection Training compliance or as required based on duty
+          // position". So a current Advanced completion stands in for Basic
+          // whether or not the member's duty position requires Advanced.
+          const advancedCurrent = isWithinRenewal(completion.advanced);
+          const effectiveBasicRequired = basicRequired && !advancedRequired && !advancedCurrent;
+          const effectiveBasicEligible = basicEligible && !advancedRequired && !advancedCurrent;
           const statusStyles = {
             current: { tone: 'good', badge: 'bg-emerald-100 text-emerald-700', border: 'border-emerald-200', text: 'text-emerald-700' },
             'due-soon': { tone: 'warn', badge: 'bg-amber-100 text-amber-700', border: 'border-amber-200', text: 'text-amber-700' },
@@ -21177,7 +21488,9 @@ window.importCapwatchZip = async function(file, onProgress) {
               expirationDate.setDate(expirationDate.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
               daysRemaining = Math.ceil((expirationDate - now) / (1000 * 60 * 60 * 24));
             }
-            if (required) {
+            // A completion is worth reporting even when the course is not
+            // required, so the record is never silently dropped.
+            if (required || lastCompleted) {
               if (!lastCompleted) {
                 status = 'missing';
               } else if (daysRemaining < 0) {
@@ -21238,8 +21551,12 @@ window.importCapwatchZip = async function(file, onProgress) {
             label: advancedLabel,
             lastCompleted: completion.advanced || null,
             required: advancedRequired,
-            eligible: advancedRequired,
-            note: null
+            // Surface a completed Advanced course even when the member's duty
+            // position does not require it, rather than discarding the record.
+            eligible: advancedRequired || Boolean(completion.advanced),
+            note: !advancedRequired && completion.advanced
+              ? 'Not required for this duty position; renews Cadet Protection in lieu of the Basic Course.'
+              : null
           });
 
           const requiredCourses = [basic, advanced].filter(course => course.required);
@@ -21247,6 +21564,17 @@ window.importCapwatchZip = async function(file, onProgress) {
 
           const indicator = (() => {
             if (!requiredCourses.length) {
+              // Basic applied to this member and was satisfied by a current
+              // Advanced completion, which is not the same as not applying.
+              if (basicRequired && advancedCurrent) {
+                return {
+                  tone: 'good',
+                  status: 'current',
+                  label: 'Cadet Protection current',
+                  title: `${advanced.label}: ${advanced.statusLabel} (exp ${formatShortDate(advanced.expirationDate)})`,
+                  items: [{ id: advanced.id, label: advanced.label, status: advanced.status, statusLabel: advanced.statusLabel }]
+                };
+              }
               if (effectiveBasicEligible && !completion.basic) {
                 return {
                   tone: 'warn',
@@ -21789,13 +22117,13 @@ window.importCapwatchZip = async function(file, onProgress) {
 
                   // Level 2: honor track-specific applicability
                   if (levelId === 'L2P1' || levelId === 'L2P2') {
-                    const memberTrack = member.level2Track || determineLevel2Track(dataFiles.memberTasks ? dataFiles.memberTasks.filter(mt => mt.CAPID === member.CAPID) : []);
+                    const memberTrack = member.level2Track || determineLevel2Track(lookupRows(getDataIndexes(dataFiles).memberTasksByCapid, member.CAPID));
                     const appliesTo = LEVEL2_TASK_TRACKS[taskDef.TaskID] || ["ALL"];
                     if (memberTrack && !(appliesTo.includes("ALL") || appliesTo.includes(memberTrack))) return;
                   }
 
-                  const isDone = dataFiles.memberTasks.some(mt =>
-                    mt.CAPID === member.CAPID && mt.TaskID === taskDef.TaskID && mt.StatusID === "8"
+                  const isDone = lookupRows(getDataIndexes(dataFiles).memberTasksByCapid, member.CAPID).some(mt =>
+                    mt.TaskID === taskDef.TaskID && mt.StatusID === "8"
                   );
                   if (!isDone) {
                     taskNeedCount.get(taskKey).neededBy.push({
@@ -24874,6 +25202,8 @@ window.importCapwatchZip = async function(file, onProgress) {
                   .filter(d => dutyOrgIds.includes(d.ORGID))
                   .filter(d => d.Duty && !d.Duty.toUpperCase().includes('#REF'))
               : [];
+            // Index the org-scoped subset, not the global table - scope matters here
+            const allCadetDutiesByCapid = groupRowsBy(allCadetDuties, 'CAPID');
             const councilCadetDuties = dataFiles.cadetDuty
               ? dataFiles.cadetDuty
                   .filter(d => councilOrgIds.includes(d.ORGID))
@@ -25156,8 +25486,7 @@ window.importCapwatchZip = async function(file, onProgress) {
                 // Only include cadets whose home unit is the current org (avoid wing-wide flooding)
                 if (String(m.ORGID).trim() !== String(unitFilter).trim()) return false;
 
-                const hasNonFlightDuty = allCadetDuties.some(d =>
-                  d.CAPID === m.CAPID &&
+                const hasNonFlightDuty = lookupRows(allCadetDutiesByCapid, m.CAPID).some(d =>
                   !d.Duty.toUpperCase().includes('FLIGHT') &&
                   !d.Duty.toUpperCase().includes('ELEMENT')
                 );
@@ -27691,15 +28020,7 @@ window.importCapwatchZip = async function(file, onProgress) {
               <div className="spinner mb-4"></div>
               <h2 className="text-xl font-bold text-slate-800">Loading {window.APP_CONFIG?.appShortName || APP_SHORT_NAME} <span className="text-xs font-normal bg-green-600 text-white px-1.5 py-0.5 rounded ml-1">PREVIEW</span>...</h2>
               <p className="text-slate-500 mt-2 text-sm">{loadingStatus}</p>
-  
-            {showZipImportModal && (
-              <ZipImportModal
-                isOpen={showZipImportModal}
-                onImport={handleZipImport}
-                onClose={null}
-              />
-            )}
-          </div>
+            </div>
           );
         }
         
@@ -27725,7 +28046,12 @@ window.importCapwatchZip = async function(file, onProgress) {
                 <div className="flex items-center gap-2 w-full md:w-auto flex-nowrap">
                      <div className="relative flex-1 min-w-[200px]">
                         <select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} className="bg-blue-800 border border-blue-700 text-white rounded pl-2 pr-8 py-2 text-sm font-bold cursor-pointer focus:ring-1 focus:ring-blue-400 appearance-none w-full sm:max-w-[320px] truncate">
-                            {availableUnits.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                            {unitOptionGroups.map(section => {
+                              const options = section.options.map(o => <option key={o.id} value={o.id}>{o.label}</option>);
+                              return section.label
+                                ? <optgroup key={section.key} label={section.label}>{options}</optgroup>
+                                : <React.Fragment key={section.key}>{options}</React.Fragment>;
+                            })}
                         </select>
                         <Icon name="ChevronDown" className="w-4 h-4 text-blue-300 absolute right-2 top-2 pointer-events-none" />
                      </div>
@@ -27799,7 +28125,8 @@ window.importCapwatchZip = async function(file, onProgress) {
                       {tab.label}
                     </button>
                   ))}
-                                  <button
+
+                  <button
                     onClick={() => {
                       setShowZipImportModal(true);
                       setIsNavOpen(false);
@@ -28018,6 +28345,14 @@ window.importCapwatchZip = async function(file, onProgress) {
                 member={selectedMemberProfile}
                 dataService={dataService}
                 allQualifications={dataService.getAllESAchievements ? dataService.getAllESAchievements() : []}
+              />
+            )}
+
+            {showZipImportModal && (
+              <ZipImportModal
+                isOpen={showZipImportModal}
+                onImport={handleZipImport}
+                onClose={null}
               />
             )}
           </div>
