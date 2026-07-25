@@ -112,6 +112,27 @@
         return raw ? raw.replace(/^0+/, '').padStart(3, '0') : '';
       };
 
+      // California Wing units go by a local number that is not their national
+      // charter: charter 110 is "Squadron 80", charter 188 is "Group 2". That
+      // local number is the trailing integer in Organization.Name, after the
+      // unit-type word - "SAN JOSE SENIOR SQDN 80", "SAN FRANCISCO BAY GROUP 2".
+      // It drives the dropdown's sort order; the name itself is what shows.
+      //
+      // Anchored to the end and to a unit-type keyword so it does not grab a
+      // number embedded elsewhere in a name, and so units that carry no local
+      // number ("45TH COMPOSITE SQUADRON", "CALIFORNIA WING HQ") return null
+      // and sort after the numbered ones. Wings without this convention simply
+      // never match, so the parser is safe to run everywhere.
+      const getLocalDesignation = (name) => {
+        const m = String(name || '').match(/\b(?:SQ|SQD|SQDN|SQUADRON|GP|GROUP|FLT|FLIGHT)\.?\s*#?\s*(\d+)\s*$/i);
+        return m ? parseInt(m[1], 10) : null;
+      };
+
+      // CAPWATCH stores unit names in all-caps; render them the way people
+      // write them. Leaves digit-led tokens alone ("45TH" stays "45th").
+      const toTitleCase = (name) =>
+        String(name || '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
       function App() {
         const [activeTab, setActiveTab] = useState('home');
         const [showReference, setShowReference] = useState(false);
@@ -380,15 +401,22 @@
           const entryFor = (orgId) => {
             const org = orgById.get(orgId);
             const unitNum = padUnitNum(org.Unit) || memberUnitNum.get(orgId) || '';
+            const echelon = getUnitEchelon(org.Type);
+            const localNum = getLocalDesignation(org.Name);
+            const charterLabel = `${org.Region || ''}-${org.Wing || ''}-${unitNum}`;
+            const titleName = toTitleCase(org.Name);
             return {
               // Keep ORGID verbatim: this is the value the rest of the app
               // compares unitFilter against, sometimes without trimming.
               id: org.ORGID,
               orgId: orgId,
               unitNum: unitNum,
-              name: `${org.Region || ''}-${org.Wing || ''}-${unitNum} ${org.Name || ''}`.trim(),
-              shortName: String(org.Name || '').trim(),
-              echelon: getUnitEchelon(org.Type),
+              localNum: localNum,
+              titleName: titleName,
+              // The full unit name people know, charter kept in parens for
+              // lookup. Sort order comes from localNum, not this text.
+              label: titleName ? `${titleName} (${charterLabel})` : charterLabel,
+              echelon: echelon,
               parentId: String(org.NextLevel || '').trim()
             };
           };
@@ -414,8 +442,9 @@
               id: orgId,
               orgId: orgId,
               unitNum: unitNum,
-              name: `Unit ${unitNum}`,
-              shortName: `Unit ${unitNum}`,
+              localNum: null,
+              titleName: `Unit ${unitNum}`,
+              label: `Unit ${unitNum}`,
               echelon: 'SQUADRON',
               parentId: ''
             });
@@ -438,10 +467,16 @@
             return '';
           };
 
+          // Order by the local designation people actually use. Units that
+          // carry one sort first, in that order; units without one (HQ, the
+          // odd name that hides its number up front) fall in after, by charter.
           const byUnitNum = (a, b) => {
+            if (a.localNum != null && b.localNum != null) return a.localNum - b.localNum;
+            if (a.localNum != null) return -1;
+            if (b.localNum != null) return 1;
             const an = parseInt(a.unitNum, 10);
             const bn = parseInt(b.unitNum, 10);
-            if (isNaN(an) && isNaN(bn)) return a.name.localeCompare(b.name);
+            if (isNaN(an) && isNaN(bn)) return a.label.localeCompare(b.label);
             if (isNaN(an)) return 1;
             if (isNaN(bn)) return -1;
             return an - bn;
@@ -492,7 +527,7 @@
               label: label,
               options: sectionEntries.map(e => ({
                 id: e.id,
-                label: (indentEntries && indentEntries.has(e) ? INDENT : '') + e.name
+                label: (indentEntries && indentEntries.has(e) ? INDENT : '') + e.label
               }))
             });
             sectionEntries.forEach(e => units.push(e));
@@ -503,7 +538,7 @@
             const squadrons = squadronsByGroup.get(group.orgId) || [];
             addSection(
               `group-${group.orgId}`,
-              group.shortName || group.name,
+              group.titleName || group.label,
               [group].concat(squadrons),
               new Set(squadrons)
             );
