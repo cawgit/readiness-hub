@@ -42,8 +42,12 @@ jobs:
             exit 1
           fi
           grep -q "CapwatchDB" _site/index.html
-          grep -q "ZipImportModal" _site/index.html
           grep -q "PREVIEW" _site/index.html
+          # Check the modal is actually rendered, not merely defined. Grepping
+          # for the bare name passes on the state variable and callback even
+          # when the JSX injection failed and the import button does nothing.
+          grep -q "<ZipImportModal" _site/index.html
+          grep -q "Import Data" _site/index.html
           echo "All validation checks passed"
 
       - name: Upload Pages artifact

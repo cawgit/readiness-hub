@@ -169,6 +169,14 @@ use warnings;
 # Slurp entire input
 local $/;
 my $s = <STDIN>;
+
+# Normalize CRLF to LF before matching. The repo has no .gitattributes, so a
+# Windows checkout hands this script CRLF input while CI on Linux gets LF.
+# Every multi-line anchor below matches \n, so on Windows those transformations
+# silently failed - the ZIP import modal was never rendered - while the
+# single-line ones still applied and the build reported success.
+$s =~ s/\r\n/\n/g;
+
 my $changes = 0;
 
 # 1. Add showZipImportModal state after loading state
@@ -300,6 +308,15 @@ if ($s =~ s|(          </div>\n        \);\n      \}\n+)(      const root = Reac
 
 print STDERR "  Applied $changes/9 transformations\n";
 print $s;
+
+# Fail the build rather than emitting a half-transformed preview. A partial
+# apply still produces a large, plausible-looking page that passes the marker
+# greps, so without this the breakage only surfaces when someone clicks a
+# button that does nothing.
+if ($changes < 9) {
+  print STDERR "  ERROR: only $changes/9 transformations applied - preview would be broken\n";
+  exit 1;
+}
 PERLSCRIPT
 
 # Run the transformation
