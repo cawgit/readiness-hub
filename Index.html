@@ -1102,6 +1102,16 @@
           };
 
           const dutyRecords = (dataFiles.duty || []).filter(d => String(d.CAPID || '').trim() === capid);
+          // Positions that must hold the Advanced Course, per CAPR 60-2
+          // (18 August 2025) para 3.3.1: commander, deputy commander (group or
+          // higher), deputy commander for cadets, chief of staff, director of
+          // cadet programs, legal officer and inspector general - plus
+          // encampment commanders, commandants of cadets, and NCSA directors
+          // and deputies.
+          //
+          // The echelon qualifier belongs to deputy commander alone; chief of
+          // staff and director of cadet programs carry none. The summary page
+          // at GoCivilAirPatrol.com/CPP words this differently - the reg wins.
           const advancedRequired = isSenior && dutyRecords.some(duty => {
             const dutyName = String(duty.Duty || '').toUpperCase().replace(/\s+/g, ' ').trim();
             if (!dutyName) return false;
@@ -1111,7 +1121,8 @@
               'GROUP COMMANDER',
               'WING COMMANDER',
               'REGION COMMANDER',
-              'UNIT COMMANDER'
+              'UNIT COMMANDER',
+              'ENCAMPMENT COMMANDER'
             ];
             const isCommander = commanderTitles.includes(dutyName);
             const isDeputyCommanderGroupPlus = dutyName.includes('DEPUTY COMMANDER') && isGroupOrHigher(duty.ORGID);
@@ -1120,6 +1131,9 @@
             const isChiefOfStaff = dutyName.includes('CHIEF OF STAFF');
             const isLegalOfficer = dutyName.includes('LEGAL OFFICER');
             const isInspectorGeneral = dutyName.includes('INSPECTOR GENERAL');
+            const isCommandantOfCadets = dutyName.includes('COMMANDANT');
+            const isNcsaDirectorOrDeputy = dutyName.includes('NCSA')
+              && (dutyName.includes('DIRECTOR') || dutyName.includes('DEPUTY'));
             return (
               isCommander ||
               isDeputyCommanderGroupPlus ||
@@ -1127,14 +1141,29 @@
               isDirectorCadetPrograms ||
               isChiefOfStaff ||
               isLegalOfficer ||
-              isInspectorGeneral
+              isInspectorGeneral ||
+              isCommandantOfCadets ||
+              isNcsaDirectorOrDeputy
             );
           });
 
           const completion = trainingIndex.get(capid) || {};
-          const effectiveBasicRequired = basicRequired && !advancedRequired;
-          const effectiveBasicEligible = basicEligible && !advancedRequired;
           const now = new Date();
+          const isWithinRenewal = (date) => {
+            if (!date) return false;
+            const expires = new Date(date);
+            expires.setDate(expires.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
+            return expires >= now;
+          };
+          // CAPR 60-2 para 3.2.4: members who complete the Advanced Course "may
+          // renew that credential in lieu of renewing their Basic Course
+          // credential", and para 3.3.2 lets them do so "to maintain Cadet
+          // Protection Training compliance or as required based on duty
+          // position". So a current Advanced completion stands in for Basic
+          // whether or not the member's duty position requires Advanced.
+          const advancedCurrent = isWithinRenewal(completion.advanced);
+          const effectiveBasicRequired = basicRequired && !advancedRequired && !advancedCurrent;
+          const effectiveBasicEligible = basicEligible && !advancedRequired && !advancedCurrent;
           const statusStyles = {
             current: { tone: 'good', badge: 'bg-emerald-100 text-emerald-700', border: 'border-emerald-200', text: 'text-emerald-700' },
             'due-soon': { tone: 'warn', badge: 'bg-amber-100 text-amber-700', border: 'border-amber-200', text: 'text-amber-700' },
@@ -1153,7 +1182,9 @@
               expirationDate.setDate(expirationDate.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
               daysRemaining = Math.ceil((expirationDate - now) / (1000 * 60 * 60 * 24));
             }
-            if (required) {
+            // A completion is worth reporting even when the course is not
+            // required, so the record is never silently dropped.
+            if (required || lastCompleted) {
               if (!lastCompleted) {
                 status = 'missing';
               } else if (daysRemaining < 0) {
@@ -1214,8 +1245,12 @@
             label: advancedLabel,
             lastCompleted: completion.advanced || null,
             required: advancedRequired,
-            eligible: advancedRequired,
-            note: null
+            // Surface a completed Advanced course even when the member's duty
+            // position does not require it, rather than discarding the record.
+            eligible: advancedRequired || Boolean(completion.advanced),
+            note: !advancedRequired && completion.advanced
+              ? 'Not required for this duty position; renews Cadet Protection in lieu of the Basic Course.'
+              : null
           });
 
           const requiredCourses = [basic, advanced].filter(course => course.required);
@@ -1223,6 +1258,17 @@
 
           const indicator = (() => {
             if (!requiredCourses.length) {
+              // Basic applied to this member and was satisfied by a current
+              // Advanced completion, which is not the same as not applying.
+              if (basicRequired && advancedCurrent) {
+                return {
+                  tone: 'good',
+                  status: 'current',
+                  label: 'Cadet Protection current',
+                  title: `${advanced.label}: ${advanced.statusLabel} (exp ${formatShortDate(advanced.expirationDate)})`,
+                  items: [{ id: advanced.id, label: advanced.label, status: advanced.status, statusLabel: advanced.statusLabel }]
+                };
+              }
               if (effectiveBasicEligible && !completion.basic) {
                 return {
                   tone: 'warn',
