@@ -190,12 +190,21 @@ const PromotionStatusCard = ({ cadet }) => {
         </div>
         <div title={rankDate && rankDate !== '01/01/1900' ? `Date of Rank: ${rankDate}` : ''}>
           <p className="text-xs text-slate-500 uppercase">Promotion Eligible</p>
-          <p className={`text-lg font-semibold ${timeInGrade.isEligible ? 'text-green-600' : 'text-slate-900'}`}>
-            {timeInGrade.eligibleDate || 'N/A'}
-          </p>
-          <p className="text-xs text-slate-600">
-            {timeInGrade.isEligible ? '✓ Eligible now' : `${timeInGrade.days} days (${CADET_TIME_IN_GRADE_DAYS - timeInGrade.days} more needed)`}
-          </p>
+          {timeInGrade.noFurtherPromotion ? (
+            <>
+              <p className="text-lg font-semibold text-purple-700">★ Program complete</p>
+              <p className="text-xs text-slate-600">No further cadet promotion</p>
+            </>
+          ) : (
+            <>
+              <p className={`text-lg font-semibold ${timeInGrade.isEligible ? 'text-green-600' : 'text-slate-900'}`}>
+                {timeInGrade.eligibleDate || 'N/A'}
+              </p>
+              <p className="text-xs text-slate-600">
+                {timeInGrade.isEligible ? '✓ Eligible now' : `${timeInGrade.days} days (${CADET_TIME_IN_GRADE_DAYS - timeInGrade.days} more needed)`}
+              </p>
+            </>
+          )}
         </div>
       </div>
 

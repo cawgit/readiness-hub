@@ -10,6 +10,16 @@ const determinePhaseFromAchievement = (achievementID) => {
   return 0;
 };
 
+// CAPVA 60-100 defines four phases. CADET_PHASES carries a fifth bucket so the
+// Spaatz award keeps its own block on the progress timeline, but Spaatz is a
+// capstone award, not a Phase V - never label it as one.
+const getPhaseLabel = (phase) => {
+  const id = parseInt(phase);
+  if (!id) return 'Pre-Phase I';
+  if (id >= 5) return 'Spaatz';
+  return `Phase ${['I', 'II', 'III', 'IV'][id - 1]}`;
+};
+
 const isMilestoneAchievement = (achievementID) => {
   return CADET_MILESTONE_ACHIEVEMENTS.includes(parseInt(achievementID));
 };

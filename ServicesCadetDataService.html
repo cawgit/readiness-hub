@@ -75,10 +75,19 @@ function createCadetDataService() {
   // tigDays is the minimum time in grade for the next promotion. It is 56 days
   // for every achievement except C/AB -> C/Amn, which CAPVA 60-100 lists as
   // "Upon Joining" - a new cadet is eligible for Achievement 1 immediately.
+  // Pass null for C/Col, where no further cadet promotion exists.
   const getTimeInGrade = (rankDate, tigDays = CADET_TIME_IN_GRADE_DAYS) => {
     if (!rankDate || rankDate === '01/01/1900') return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
     const days = calculateDaysSince(rankDate);
     const weeks = Math.floor(days / 7);
+
+    // C/Col is the top of the cadet program - Spaatz is the last award and the
+    // next step is transferring to senior membership, not another promotion.
+    // Time in grade is still reported, but there is no eligibility date.
+    if (tigDays === null) {
+      return { days, weeks, isEligible: false, eligibleDate: null, noFurtherPromotion: true };
+    }
+
     const isEligible = days >= tigDays;
 
     // Calculate the date eligible for promotion (rank date + time in grade)
@@ -301,6 +310,11 @@ function createCadetDataService() {
       if (noTigRequired) {
         requirements.timeInGrade.completed = true;
         requirements.timeInGrade.value = 'No time in grade requirement';
+      } else if (timeInGrade.noFurtherPromotion) {
+        // A C/Col has already earned everything, so any achievement whose detail
+        // they open is retrospective - its time in grade was met long ago.
+        requirements.timeInGrade.completed = true;
+        requirements.timeInGrade.value = `${timeInGrade.days} days (${timeInGrade.weeks} weeks) ✓`;
       } else {
         requirements.timeInGrade.completed = timeInGrade.isEligible;
         requirements.timeInGrade.value = timeInGrade.isEligible
@@ -889,9 +903,14 @@ function createCadetDataService() {
           effectiveDate = achvApprovalDate;
         }
       }
-      // C/AB -> C/Amn has no minimum time in grade (CAPVA 60-100, "Upon Joining")
-      const tigDays = isNewCadet ? 0 : CADET_TIME_IN_GRADE_DAYS;
-      const timeInGrade = effectiveDate ? getTimeInGrade(effectiveDate, tigDays) : { days: 0, weeks: 0, isEligible: false };
+      // C/AB -> C/Amn has no minimum time in grade (CAPVA 60-100, "Upon Joining").
+      // Spaatz (achievement 21, C/Col) is the top of the program - null means
+      // there is no next promotion to be eligible for.
+      const isProgramComplete = currentAchievement >= 21;
+      const tigDays = isNewCadet ? 0 : (isProgramComplete ? null : CADET_TIME_IN_GRADE_DAYS);
+      const timeInGrade = effectiveDate
+        ? getTimeInGrade(effectiveDate, tigDays)
+        : { days: 0, weeks: 0, isEligible: false, noFurtherPromotion: isProgramComplete };
       const promotionStatus = calculatePromotionReadiness(cadet.CAPID, currentAchievement, timeInGrade);
       const nextRequirements = nextAchievement <= 21 ? getAchievementRequirements(cadet.CAPID, nextAchievement.toString(), timeInGrade) : null;
       const milestoneAwards = getMilestoneAwards(cadet.CAPID);

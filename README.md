@@ -1,6 +1,6 @@
 # CAP Readiness Hub
 
-![Version](https://img.shields.io/badge/version-1.14.3-blue)
+![Version](https://img.shields.io/badge/version-1.14.4-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A Google Apps Script web application for Civil Air Patrol units to track member readiness, cadet progression, senior member qualifications, and emergency services status.
@@ -264,7 +264,7 @@ To disable images, set the values to empty strings.
 - **Cadet ranks**: C/AB (entry grade, no insignia) and C/Amn through C/Col
 
 ### Cadet Program
-- **Phases I-V**: Learning, Leadership, Command, Executive, Spaatz
+- **Phases I-IV**: Learning, Leadership, Command, Executive. Spaatz is the capstone award after Phase IV, not a fifth phase — `CADET_PHASES` carries it as bucket 5 purely so it gets its own block on the progress timeline
 - **Milestones**: Wright Brothers (4), Billy Mitchell (10), Amelia Earhart (14), Ira C. Eaker (20), Carl A. Spaatz (21)
 - **HFZ**: Healthy Physical Fitness zone test
 - **TIG**: Time in Grade (56 days minimum between ranks; none from C/AB to C/Amn, which CAPVA 60-100 lists as "Upon Joining")
@@ -303,7 +303,7 @@ This project uses [Semantic Versioning](https://semver.org/) (Major.Minor.Patch)
 - **Minor**: New features and enhancements (backward-compatible)
 - **Patch**: Bug fixes and small tweaks
 
-Current version: **1.14.3** (defined in `ConfigConstants.html`)
+Current version: **1.14.4** (defined in `ConfigConstants.html`)
 
 ### Release Process
 

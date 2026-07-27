@@ -1,6 +1,6 @@
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.14.3';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.14.4';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -450,6 +450,9 @@ const CADET_PHASES = {
   2: { name: "Phase II (Leadership)", achievements: [5, 6, 7, 8, 9], milestoneAchv: 10, milestoneName: "Billy Mitchell", requiresEncampment: true },
   3: { name: "Phase III (Command)", achievements: [11, 12, 13], milestoneAchv: 14, milestoneName: "Amelia Earhart" },
   4: { name: "Phase IV (Executive)", achievements: [15, 16, 17, 18, 19], milestoneAchv: 20, milestoneName: "Ira C. Eaker", requiresCLS: true },
+  // Not a phase - CAPVA 60-100 defines only Phases I-IV. Spaatz is the capstone
+  // award after Phase IV; it lives here as bucket 5 so the progress timeline can
+  // give it its own block. Use getPhaseLabel() to render it, never "Phase 5".
   5: { name: "Spaatz Award", achievements: [], milestoneAchv: 21, milestoneName: "Carl A. Spaatz" }
 };
 

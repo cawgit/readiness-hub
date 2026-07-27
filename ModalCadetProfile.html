@@ -120,7 +120,7 @@ const CadetProfileModal = ({
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Phase</div>
-                <div className="text-slate-700">{cadet.phase ? `Phase ${cadet.phase}` : 'Pre-Phase I'}</div>
+                <div className="text-slate-700">{getPhaseLabel(cadet.phase)}</div>
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Time in Grade</div>
@@ -128,10 +128,16 @@ const CadetProfileModal = ({
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Promotion Eligible</div>
-                <div className={`font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-700'}`}>
-                  {cadet.timeInGrade.eligibleDate || 'N/A'}
-                  {cadet.timeInGrade.isEligible && ' ✓'}
-                </div>
+                {cadet.timeInGrade.noFurtherPromotion ? (
+                  <div className="font-semibold text-purple-700" title="Spaatz is the final cadet award; the next step is senior membership">
+                    ★ Program complete
+                  </div>
+                ) : (
+                  <div className={`font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-700'}`}>
+                    {cadet.timeInGrade.eligibleDate || 'N/A'}
+                    {cadet.timeInGrade.isEligible && ' ✓'}
+                  </div>
+                )}
               </div>
             </div>
             {/* Contact Information and Age */}
