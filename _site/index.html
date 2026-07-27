@@ -51,7 +51,7 @@
 
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.14.3';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.14.4';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -501,6 +501,9 @@ const CADET_PHASES = {
   2: { name: "Phase II (Leadership)", achievements: [5, 6, 7, 8, 9], milestoneAchv: 10, milestoneName: "Billy Mitchell", requiresEncampment: true },
   3: { name: "Phase III (Command)", achievements: [11, 12, 13], milestoneAchv: 14, milestoneName: "Amelia Earhart" },
   4: { name: "Phase IV (Executive)", achievements: [15, 16, 17, 18, 19], milestoneAchv: 20, milestoneName: "Ira C. Eaker", requiresCLS: true },
+  // Not a phase - CAPVA 60-100 defines only Phases I-IV. Spaatz is the capstone
+  // award after Phase IV; it lives here as bucket 5 so the progress timeline can
+  // give it its own block. Use getPhaseLabel() to render it, never "Phase 5".
   5: { name: "Spaatz Award", achievements: [], milestoneAchv: 21, milestoneName: "Carl A. Spaatz" }
 };
 
@@ -1399,6 +1402,16 @@ const determinePhaseFromAchievement = (achievementID) => {
     if (list.includes(achvId)) return parseInt(phaseId);
   }
   return 0;
+};
+
+// CAPVA 60-100 defines four phases. CADET_PHASES carries a fifth bucket so the
+// Spaatz award keeps its own block on the progress timeline, but Spaatz is a
+// capstone award, not a Phase V - never label it as one.
+const getPhaseLabel = (phase) => {
+  const id = parseInt(phase);
+  if (!id) return 'Pre-Phase I';
+  if (id >= 5) return 'Spaatz';
+  return `Phase ${['I', 'II', 'III', 'IV'][id - 1]}`;
 };
 
 const isMilestoneAchievement = (achievementID) => {
@@ -4094,10 +4107,19 @@ function createCadetDataService() {
   // tigDays is the minimum time in grade for the next promotion. It is 56 days
   // for every achievement except C/AB -> C/Amn, which CAPVA 60-100 lists as
   // "Upon Joining" - a new cadet is eligible for Achievement 1 immediately.
+  // Pass null for C/Col, where no further cadet promotion exists.
   const getTimeInGrade = (rankDate, tigDays = CADET_TIME_IN_GRADE_DAYS) => {
     if (!rankDate || rankDate === '01/01/1900') return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
     const days = calculateDaysSince(rankDate);
     const weeks = Math.floor(days / 7);
+
+    // C/Col is the top of the cadet program - Spaatz is the last award and the
+    // next step is transferring to senior membership, not another promotion.
+    // Time in grade is still reported, but there is no eligibility date.
+    if (tigDays === null) {
+      return { days, weeks, isEligible: false, eligibleDate: null, noFurtherPromotion: true };
+    }
+
     const isEligible = days >= tigDays;
 
     // Calculate the date eligible for promotion (rank date + time in grade)
@@ -4320,6 +4342,11 @@ function createCadetDataService() {
       if (noTigRequired) {
         requirements.timeInGrade.completed = true;
         requirements.timeInGrade.value = 'No time in grade requirement';
+      } else if (timeInGrade.noFurtherPromotion) {
+        // A C/Col has already earned everything, so any achievement whose detail
+        // they open is retrospective - its time in grade was met long ago.
+        requirements.timeInGrade.completed = true;
+        requirements.timeInGrade.value = `${timeInGrade.days} days (${timeInGrade.weeks} weeks) ✓`;
       } else {
         requirements.timeInGrade.completed = timeInGrade.isEligible;
         requirements.timeInGrade.value = timeInGrade.isEligible
@@ -4908,9 +4935,14 @@ function createCadetDataService() {
           effectiveDate = achvApprovalDate;
         }
       }
-      // C/AB -> C/Amn has no minimum time in grade (CAPVA 60-100, "Upon Joining")
-      const tigDays = isNewCadet ? 0 : CADET_TIME_IN_GRADE_DAYS;
-      const timeInGrade = effectiveDate ? getTimeInGrade(effectiveDate, tigDays) : { days: 0, weeks: 0, isEligible: false };
+      // C/AB -> C/Amn has no minimum time in grade (CAPVA 60-100, "Upon Joining").
+      // Spaatz (achievement 21, C/Col) is the top of the program - null means
+      // there is no next promotion to be eligible for.
+      const isProgramComplete = currentAchievement >= 21;
+      const tigDays = isNewCadet ? 0 : (isProgramComplete ? null : CADET_TIME_IN_GRADE_DAYS);
+      const timeInGrade = effectiveDate
+        ? getTimeInGrade(effectiveDate, tigDays)
+        : { days: 0, weeks: 0, isEligible: false, noFurtherPromotion: isProgramComplete };
       const promotionStatus = calculatePromotionReadiness(cadet.CAPID, currentAchievement, timeInGrade);
       const nextRequirements = nextAchievement <= 21 ? getAchievementRequirements(cadet.CAPID, nextAchievement.toString(), timeInGrade) : null;
       const milestoneAwards = getMilestoneAwards(cadet.CAPID);
@@ -6706,12 +6738,21 @@ const PromotionStatusCard = ({ cadet }) => {
         </div>
         <div title={rankDate && rankDate !== '01/01/1900' ? `Date of Rank: ${rankDate}` : ''}>
           <p className="text-xs text-slate-500 uppercase">Promotion Eligible</p>
-          <p className={`text-lg font-semibold ${timeInGrade.isEligible ? 'text-green-600' : 'text-slate-900'}`}>
-            {timeInGrade.eligibleDate || 'N/A'}
-          </p>
-          <p className="text-xs text-slate-600">
-            {timeInGrade.isEligible ? '✓ Eligible now' : `${timeInGrade.days} days (${CADET_TIME_IN_GRADE_DAYS - timeInGrade.days} more needed)`}
-          </p>
+          {timeInGrade.noFurtherPromotion ? (
+            <>
+              <p className="text-lg font-semibold text-purple-700">★ Program complete</p>
+              <p className="text-xs text-slate-600">No further cadet promotion</p>
+            </>
+          ) : (
+            <>
+              <p className={`text-lg font-semibold ${timeInGrade.isEligible ? 'text-green-600' : 'text-slate-900'}`}>
+                {timeInGrade.eligibleDate || 'N/A'}
+              </p>
+              <p className="text-xs text-slate-600">
+                {timeInGrade.isEligible ? '✓ Eligible now' : `${timeInGrade.days} days (${CADET_TIME_IN_GRADE_DAYS - timeInGrade.days} more needed)`}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
@@ -10057,7 +10098,7 @@ const CadetProfileModal = ({
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Phase</div>
-                <div className="text-slate-700">{cadet.phase ? `Phase ${cadet.phase}` : 'Pre-Phase I'}</div>
+                <div className="text-slate-700">{getPhaseLabel(cadet.phase)}</div>
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Time in Grade</div>
@@ -10065,10 +10106,16 @@ const CadetProfileModal = ({
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Promotion Eligible</div>
-                <div className={`font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-700'}`}>
-                  {cadet.timeInGrade.eligibleDate || 'N/A'}
-                  {cadet.timeInGrade.isEligible && ' ✓'}
-                </div>
+                {cadet.timeInGrade.noFurtherPromotion ? (
+                  <div className="font-semibold text-purple-700" title="Spaatz is the final cadet award; the next step is senior membership">
+                    ★ Program complete
+                  </div>
+                ) : (
+                  <div className={`font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-700'}`}>
+                    {cadet.timeInGrade.eligibleDate || 'N/A'}
+                    {cadet.timeInGrade.isEligible && ' ✓'}
+                  </div>
+                )}
               </div>
             </div>
             {/* Contact Information and Age */}
@@ -11249,28 +11296,28 @@ const ReferenceModal = ({
             <section>
               <h3 className="font-bold text-slate-800 mb-3 flex items-center border-b pb-2">
                 <Icon name="Layers" className="w-4 h-4 mr-2 text-indigo-600" />
-                Phases Explained
+                Phases Explained (CAPVA 60-100)
               </h3>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
                 <div className="bg-blue-50 p-3 rounded border border-blue-100 text-center">
                   <span className="font-bold block text-blue-800">Phase I</span>
-                  <p className="text-xs text-slate-600 mt-1">Learning (Curry → Mitchell)</p>
+                  <p className="text-xs text-slate-600 mt-1">Learning (ends with Wright Brothers)</p>
                 </div>
                 <div className="bg-blue-50 p-3 rounded border border-blue-100 text-center">
                   <span className="font-bold block text-blue-800">Phase II</span>
-                  <p className="text-xs text-slate-600 mt-1">Leadership (Mitchell → Earhart)</p>
+                  <p className="text-xs text-slate-600 mt-1">Leadership (ends with Mitchell)</p>
                 </div>
                 <div className="bg-blue-50 p-3 rounded border border-blue-100 text-center">
                   <span className="font-bold block text-blue-800">Phase III</span>
-                  <p className="text-xs text-slate-600 mt-1">Command (Earhart → Eaker)</p>
+                  <p className="text-xs text-slate-600 mt-1">Command (ends with Earhart)</p>
                 </div>
                 <div className="bg-blue-50 p-3 rounded border border-blue-100 text-center">
                   <span className="font-bold block text-blue-800">Phase IV</span>
-                  <p className="text-xs text-slate-600 mt-1">Executive (Eaker → Spaatz)</p>
+                  <p className="text-xs text-slate-600 mt-1">Executive (ends with Eaker)</p>
                 </div>
                 <div className="bg-purple-50 p-3 rounded border border-purple-100 text-center">
-                  <span className="font-bold block text-purple-800">Phase V</span>
-                  <p className="text-xs text-slate-600 mt-1">Spaatz (Complete)</p>
+                  <span className="font-bold block text-purple-800">Spaatz</span>
+                  <p className="text-xs text-slate-600 mt-1">Final award — program complete</p>
                 </div>
               </div>
             </section>
@@ -16105,9 +16152,11 @@ function CadetDashboard(props) {
     filteredCadets = filteredCadets.filter(c => c.phase === filterPhase);
   }
 
-  // 90+ days without promotion filter
+  // 90+ days without promotion filter. C/Col is excluded - they have no next
+  // promotion, so a long time in grade is not a stalled cadet.
+  const isStalled = (c) => c.timeInGrade?.days >= 90 && !c.timeInGrade?.noFurtherPromotion;
   if (filter90Days) {
-    filteredCadets = filteredCadets.filter(c => c.timeInGrade?.days >= 90);
+    filteredCadets = filteredCadets.filter(isStalled);
   }
 
   // Calculate stats for filtered results
@@ -16116,7 +16165,7 @@ function CadetDashboard(props) {
     ready: filteredCadets.filter(c => c.promotionStatus?.status === 'READY').length,
     nearlyReady: filteredCadets.filter(c => c.promotionStatus && (c.promotionStatus.status === 'NEARLY_READY' || c.promotionStatus.status === 'TIME_PENDING')).length,
     honorCredits: filteredCadets.reduce((sum, c) => sum + (c.honorCreditAchievements?.length || 0), 0),
-    days90Plus: filteredCadets.filter(c => c.timeInGrade?.days >= 90).length,
+    days90Plus: filteredCadets.filter(isStalled).length,
     phases: {
       1: filteredCadets.filter(c => c.phase === 1).length,
       2: filteredCadets.filter(c => c.phase === 2).length,
@@ -16273,7 +16322,7 @@ function CadetDashboard(props) {
               onClick={() => setFilterPhase(null)}
               className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full cursor-pointer hover:bg-blue-200 flex items-center text-xs whitespace-nowrap"
             >
-              Phase {filterPhase} <span className="ml-1">x</span>
+              {getPhaseLabel(filterPhase)} <span className="ml-1">x</span>
             </span>
           )}
           {filter90Days && (
@@ -16399,7 +16448,7 @@ function CadetDashboard(props) {
                   </div>
                   <span className={`text-[9px] font-bold mt-0.5 ${
                     filterPhase === phase ? 'text-blue-700' : 'text-slate-300 group-hover:text-slate-500'
-                  }`}>{['I', 'II', 'III', 'IV', 'V'][phase - 1]}</span>
+                  }`}>{['I', 'II', 'III', 'IV', '★'][phase - 1]}</span>
                 </div>
               ))}
             </div>
@@ -16459,15 +16508,19 @@ function CadetDashboard(props) {
                       <h3 className="font-bold text-slate-900 truncate">{cadet.NameLast}, {cadet.NameFirst}</h3>
                       <p className="text-xs text-slate-500 font-mono">CAPID: {cadet.CAPID}</p>
                       {cadet.timeInGrade && (
-                        <p className={`text-xs font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-600'}`}>
-                          Eligible: {cadet.timeInGrade.eligibleDate || 'N/A'}
-                          {cadet.timeInGrade.isEligible && ' ✓'}
-                          {cadet.timeInGrade.days >= 90 && (
-                            <span className="ml-1 inline-flex items-center" title="90+ days at current grade">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                            </span>
-                          )}
-                        </p>
+                        cadet.timeInGrade.noFurtherPromotion ? (
+                          <p className="text-xs font-semibold text-purple-700">Cadet program complete ★</p>
+                        ) : (
+                          <p className={`text-xs font-semibold ${cadet.timeInGrade.isEligible ? 'text-green-600' : 'text-slate-600'}`}>
+                            Eligible: {cadet.timeInGrade.eligibleDate || 'N/A'}
+                            {cadet.timeInGrade.isEligible && ' ✓'}
+                            {cadet.timeInGrade.days >= 90 && (
+                              <span className="ml-1 inline-flex items-center" title="90+ days at current grade">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                              </span>
+                            )}
+                          </p>
+                        )
                       )}
                     </div>
 
