@@ -17,6 +17,9 @@ const isMilestoneAchievement = (achievementID) => {
 // Get the display name for an achievement (includes special award names and pioneer names)
 const getAchievementDisplayName = (achievementID) => {
   const id = achievementID?.toString();
+  // Achievement 0 is not an achievement - it's the C/AB entry grade a cadet
+  // holds from joining until Achievement 1 is approved.
+  if (id === '0') return 'New Cadet';
   const baseName = CADET_ACHIEVEMENT_NAMES[id] || `Achievement ${achievementID}`;
 
   // Add pioneer name in parentheses for non-milestone achievements

@@ -120,7 +120,7 @@ const CadetProfileModal = ({
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Phase</div>
-                <div className="text-slate-700">Phase {cadet.phase}</div>
+                <div className="text-slate-700">{cadet.phase ? `Phase ${cadet.phase}` : 'Pre-Phase I'}</div>
               </div>
               <div>
                 <div className="text-xs text-slate-500 font-bold">Time in Grade</div>

@@ -72,16 +72,19 @@ function createCadetDataService() {
     return approval ? approval.DateMod : null;
   };
 
-  const getTimeInGrade = (rankDate) => {
+  // tigDays is the minimum time in grade for the next promotion. It is 56 days
+  // for every achievement except C/AB -> C/Amn, which CAPVA 60-100 lists as
+  // "Upon Joining" - a new cadet is eligible for Achievement 1 immediately.
+  const getTimeInGrade = (rankDate, tigDays = CADET_TIME_IN_GRADE_DAYS) => {
     if (!rankDate || rankDate === '01/01/1900') return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
     const days = calculateDaysSince(rankDate);
     const weeks = Math.floor(days / 7);
-    const isEligible = days >= CADET_TIME_IN_GRADE_DAYS;
+    const isEligible = days >= tigDays;
 
-    // Calculate the date eligible for promotion (rank date + 56 days)
+    // Calculate the date eligible for promotion (rank date + time in grade)
     const rankDateObj = new Date(rankDate);
     const eligibleDate = new Date(rankDateObj);
-    eligibleDate.setDate(eligibleDate.getDate() + CADET_TIME_IN_GRADE_DAYS);
+    eligibleDate.setDate(eligibleDate.getDate() + tigDays);
 
     return {
       days,
@@ -874,13 +877,21 @@ function createCadetDataService() {
       // (e.g., CadetAchvID 8 & 9 are both C/CMSgt - TIG for Billy Mitchell should
       // be based on Achievement 9's completion, not Achievement 8's rank date)
       let effectiveDate = currentRank ? currentRank.RankDate : null;
-      if (currentAchievement > 0) {
+      // C/AB (achievement 0) is the grade a cadet holds on joining. CAPWATCH
+      // writes no CadetRank row and no CadetAchvAprs row for it, so time in
+      // grade runs from the membership join date instead.
+      const isNewCadet = currentAchievement === 0;
+      if (isNewCadet) {
+        effectiveDate = cadet.Joined || effectiveDate;
+      } else {
         const achvApprovalDate = getAchievementApprovalDate(cadet.CAPID, currentAchievement);
         if (achvApprovalDate && achvApprovalDate !== '01/01/1900') {
           effectiveDate = achvApprovalDate;
         }
       }
-      const timeInGrade = effectiveDate ? getTimeInGrade(effectiveDate) : { days: 0, weeks: 0, isEligible: false };
+      // C/AB -> C/Amn has no minimum time in grade (CAPVA 60-100, "Upon Joining")
+      const tigDays = isNewCadet ? 0 : CADET_TIME_IN_GRADE_DAYS;
+      const timeInGrade = effectiveDate ? getTimeInGrade(effectiveDate, tigDays) : { days: 0, weeks: 0, isEligible: false };
       const promotionStatus = calculatePromotionReadiness(cadet.CAPID, currentAchievement, timeInGrade);
       const nextRequirements = nextAchievement <= 21 ? getAchievementRequirements(cadet.CAPID, nextAchievement.toString(), timeInGrade) : null;
       const milestoneAwards = getMilestoneAwards(cadet.CAPID);
@@ -924,7 +935,9 @@ function createCadetDataService() {
         ...cadet,
         memberUnitName,
         cadetDuties,
-        currentRank: currentRank ? currentRank.Rank : 'N/A',
+        // CadetRank only has rows for cadets who have been promoted at least
+        // once, so derive the grade from the achievement when it is missing.
+        currentRank: currentRank ? currentRank.Rank : (CADET_ACHIEVEMENT_TO_RANK[String(currentAchievement)] || 'N/A'),
         rankDate: currentRank ? currentRank.RankDate : null,
         currentAchievement,
         nextAchievement: nextAchievement <= 21 ? nextAchievement : null,

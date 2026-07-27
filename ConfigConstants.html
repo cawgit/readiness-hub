@@ -1,6 +1,6 @@
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.14.2';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.14.3';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -434,6 +434,10 @@ const COMMUNICATIONS_DUTY_POSITIONS = new Set([
 
 // Cadet program constants
 const CADET_ACHIEVEMENT_TO_RANK = {
+  // Achievement 0 is the entry grade a cadet holds before earning Achievement 1.
+  // CAPVA 60-100 lists it as Cadet Airman Basic; it has no insignia and no
+  // ribbon, so CADET_RANK_INSIGNIA deliberately has no "0" entry.
+  "0": "C/AB",
   "1": "C/Amn", "2": "C/A1C", "3": "C/SrA",
   "4": "C/SSgt", "5": "C/TSgt", "6": "C/MSgt", "7": "C/SMSgt", "8": "C/CMSgt",
   "9": "C/CMSgt", "10": "C/2d Lt", "11": "C/2d Lt", "12": "C/1st Lt", "13": "C/1st Lt",

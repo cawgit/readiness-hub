@@ -473,7 +473,7 @@ function CadetDashboard(props) {
                           Eligible: {cadet.timeInGrade.eligibleDate || 'N/A'}
                           {cadet.timeInGrade.isEligible && ' ✓'}
                           {cadet.timeInGrade.days >= 90 && (
-                            <span className="ml-1 inline-flex items-center" title="90+ days since last promotion">
+                            <span className="ml-1 inline-flex items-center" title="90+ days at current grade">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                             </span>
                           )}
