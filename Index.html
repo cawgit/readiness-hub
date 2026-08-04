@@ -797,7 +797,7 @@
         }, [trainingRecords]);
 
         // Build VOLU instructor index - maps CAPID to their instructor qualifications
-        // Structure: Map<CAPID, { courses: Map<PathName, { online: boolean, faceToFace: boolean }>, isChair: boolean }>
+        // Structure: Map<CAPID, { courses: Map<PathName, { online: boolean, faceToFace: boolean, chair: boolean }>, isChair: boolean }>
         const voluInstructorIndex = useMemo(() => {
           const map = new Map();
           if (!dataFiles.voluInstructors || dataFiles.voluInstructors.length === 0) return map;
@@ -824,10 +824,13 @@
             }
 
             if (!entry.courses.has(pathName)) {
-              entry.courses.set(pathName, { online: false, faceToFace: false });
+              entry.courses.set(pathName, { online: false, faceToFace: false, chair: false });
             }
 
             const course = entry.courses.get(pathName);
+            if (instructorType === 'chair') {
+              course.chair = true;
+            }
             if (category === 'online') {
               course.online = true;
             } else if (category === 'facetoface') {
@@ -837,6 +840,32 @@
 
           return map;
         }, [dataFiles.voluInstructors]);
+
+        // Re-key the VOLU instructor index by ET level id so level circles can show
+        // who holds instructor privileges for that level.
+        // Structure: Map<CAPID, Map<LevelId, { online: boolean, faceToFace: boolean, chair: boolean }>>
+        const voluInstructorLevelIndex = useMemo(() => {
+          const map = new Map();
+          if (voluInstructorIndex.size === 0) return map;
+
+          const normalizePath = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+          voluInstructorIndex.forEach((entry, capid) => {
+            const byPath = new Map();
+            entry.courses.forEach((modes, pathName) => byPath.set(normalizePath(pathName), modes));
+
+            const levels = new Map();
+            LEVELS.forEach(lvl => {
+              const modes = byPath.get(normalizePath(lvl.pathMatch || lvl.name))
+                || (lvl.fallbackMatch ? byPath.get(normalizePath(lvl.fallbackMatch)) : null);
+              if (modes) levels.set(lvl.id, modes);
+            });
+
+            if (levels.size > 0) map.set(capid, levels);
+          });
+
+          return map;
+        }, [voluInstructorIndex]);
 
         const getLevelBreakdown = (member, levelKey) => {
           const pathId = levelPathMap[levelKey];
@@ -7854,7 +7883,7 @@
                 unitStats, baseUnitStats, paginatedData, isMobile, currentPage, setCurrentPage,
                 totalPages, handleLevelFilterClick, getEtSummary, displayData, DATA_CONSTANTS,
                 LEVEL_DISPLAY_MAP, LEVELS, setFilterPromoReady, getTrainingIndicator,
-                filterTlcQualified, setFilterTlcQualified
+                filterTlcQualified, setFilterTlcQualified, voluInstructorLevelIndex
               }} />}
 
               {activeTab === 'cadet' && <CadetDashboard {...{

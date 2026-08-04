@@ -10,7 +10,7 @@ function SeniorDashboard(props) {
     unitStats, baseUnitStats, paginatedData, isMobile, currentPage, setCurrentPage,
     totalPages, handleLevelFilterClick, getEtSummary, displayData, DATA_CONSTANTS,
     LEVEL_DISPLAY_MAP, LEVELS, setFilterPromoReady, getTrainingIndicator,
-    filterTlcQualified, setFilterTlcQualified
+    filterTlcQualified, setFilterTlcQualified, voluInstructorLevelIndex
   } = props;
 
   const TRAINING_INDICATOR_STYLES = {
@@ -445,11 +445,16 @@ function SeniorDashboard(props) {
                   </div>
                   </td>
                   <td className="px-4 sm:px-6 py-4 align-top">
-                    <div className="flex justify-center gap-1.5">
+                    {(() => {
+                      const memberInstructorLevels = voluInstructorLevelIndex?.get(String(m.CAPID).trim());
+                      return (
+                    <div className="flex justify-center gap-2.5">
                       {LEVELS.map(lvl => (
-                        <LevelIndicator key={lvl.id} level={lvl.id} label={lvl.label} name={lvl.name} progress={m.levelsProgress[lvl.id] || { percent: 0, status: 'not-started' }} onClick={(e)=>{e.stopPropagation(); setSelectedMember(m); setDetailLevel(lvl.id)}} />
+                        <LevelIndicator key={lvl.id} level={lvl.id} label={lvl.label} name={lvl.name} progress={m.levelsProgress[lvl.id] || { percent: 0, status: 'not-started' }} instructor={memberInstructorLevels?.get(lvl.id) || null} onClick={(e)=>{e.stopPropagation(); setSelectedMember(m); setDetailLevel(lvl.id)}} />
                       ))}
                     </div>
+                      );
+                    })()}
                     {LEVEL_ORDER.some(id => m.levelsProgress[id] && (m.levelsProgress[id].status === 'ready' || m.levelsProgress[id].status === 'pending')) && (
                       <div className="text-[10px] text-amber-600 font-semibold text-center mt-1">Needs approval/submission</div>
                     )}

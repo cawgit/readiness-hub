@@ -1,5 +1,5 @@
 <script type="text/babel">
-const LevelIndicator = ({ level, label, name, progress = {}, onClick }) => {
+const LevelIndicator = ({ level, label, name, progress = {}, instructor = null, onClick }) => {
   const pct = progress.percent || 0;
   const status = progress.status || 'not-started';
   const approvalStatus = progress.approvalStatus;
@@ -16,6 +16,14 @@ const LevelIndicator = ({ level, label, name, progress = {}, onClick }) => {
   else if (isPending) { circleClass = "border-amber-600 bg-white"; textClass = "text-amber-700"; }
   else if (isInProgress || isStarted) { circleClass = "border-blue-400 bg-white"; textClass = "text-blue-600"; }
 
+  // Volunteer University instructors get a green ring around the level circle.
+  const instructorModes = instructor
+    ? [instructor.faceToFace && "Face-to-Face", instructor.online && "Online"].filter(Boolean)
+    : [];
+  const instructorLine = instructor
+    ? `VU Instructor${instructor.chair ? " (Chair)" : ""}${instructorModes.length ? `: ${instructorModes.join(" + ")}` : ""}`
+    : null;
+
   const statusLine = (() => {
     if (isComplete) return `Completed${progress.date ? `: ${progress.date}` : ""}`;
     if (isPending) return approvalStatus === 'disapproved' ? "Submitted - needs update" : "Submitted - awaiting approval";
@@ -27,7 +35,7 @@ const LevelIndicator = ({ level, label, name, progress = {}, onClick }) => {
 
   return (
     <div className="flex flex-col items-center group cursor-pointer relative" onClick={onClick}>
-      <div className={`relative w-8 h-8 flex items-center justify-center rounded-full border-2 ${circleClass}`}>
+      <div className={`relative w-8 h-8 flex items-center justify-center rounded-full border-2 ${circleClass} ${instructor ? 'ring-2 ring-emerald-500 ring-offset-1 ring-offset-white' : ''}`}>
         {!isComplete && isStarted && !isReady && !isPending && (
           <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
             <path className="text-blue-500" strokeDasharray={`${pct}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
@@ -41,6 +49,7 @@ const LevelIndicator = ({ level, label, name, progress = {}, onClick }) => {
       <div className="absolute bottom-full mb-2 hidden group-hover:block z-50 w-max bg-slate-800 text-white text-xs rounded py-1 px-2 shadow-lg">
           {name || `Level ${label || level}`}: {pct}%
           <div className="text-[10px] text-slate-300 mt-1">{statusLine}</div>
+          {instructorLine && <div className="text-[10px] text-emerald-300 mt-1">{instructorLine}</div>}
       </div>
     </div>
   );
