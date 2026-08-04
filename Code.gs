@@ -161,17 +161,101 @@ function getAppConfig() {
  * @returns {string} - The user's full name or 'Unknown' if lookup fails
  */
 function getUserFullName(userEmail) {
+  const user = getDirectoryUser(userEmail);
+  return (user && user.name && user.name.fullName) || 'Unknown';
+}
+
+/**
+ * Look up a Workspace Directory record, or null when there isn't one.
+ *
+ * Kept separate from getUserFullName so a caller that needs more than the name
+ * (doGet wants the unit hints too) can spend a single Directory call on it.
+ *
+ * @param {string} userEmail - The user's email address
+ * @returns {Object|null} - The Directory user resource, or null on any failure
+ */
+function getDirectoryUser(userEmail) {
   if (!userEmail || userEmail === 'Unknown') {
-    return 'Unknown';
+    return null;
   }
 
   try {
-    const user = AdminDirectory.Users.get(userEmail);
-    return user.name.fullName || 'Unknown';
+    // 'full' so externalIds comes back alongside the name and the OU path.
+    return AdminDirectory.Users.get(userEmail, { projection: 'full' });
   } catch (err) {
-    Logger.log("Could not retrieve full name for " + userEmail + ": " + err.message);
-    return 'Unknown';
+    Logger.log("Could not retrieve the directory record for " + userEmail + ": " + err.message);
+    return null;
   }
+}
+
+/**
+ * The signed-in user's identity, for the page to open the unit picker on their
+ * own unit instead of on wing HQ.
+ *
+ * Two hints ride along because no single field is filled in for everybody: the
+ * CAP ID recorded on the Workspace account, and the unit number at the tail of
+ * its org unit path. The page tries each in turn against the extract, then the
+ * member's CAPWATCH contact email, and falls back to the wing. An account that
+ * matches none of them - a service account, or region staff whose unit sits
+ * above this extract - lands on the wing, which is the right answer for them.
+ *
+ * Nothing here is a permission check. Every unit stays selectable; this only
+ * decides which one is showing when the page opens.
+ *
+ * @param {string} userEmail - The signed-in user's email address
+ * @param {Object|null} directoryUser - Their Directory record, if it was found
+ * @returns {Object} - { email, capid, unitNum }
+ */
+function buildActiveUserIdentity(userEmail, directoryUser) {
+  return {
+    email: userEmail && userEmail !== 'Unknown' ? userEmail : '',
+    capid: getDirectoryCapId(directoryUser),
+    unitNum: getDirectoryUnitNumber(directoryUser)
+  };
+}
+
+/**
+ * CAP ID recorded on a Workspace account's external IDs.
+ *
+ * The list can hold IDs from any system, so entries that name CAP come first
+ * and a bare CAP-ID-shaped number is the fallback. A wrong guess costs nothing:
+ * the page only uses the number if it matches an active member in the extract.
+ *
+ * @param {Object|null} user - A Directory user resource
+ * @returns {string} - The CAP ID, or '' when the account carries none
+ */
+function getDirectoryCapId(user) {
+  const externalIds = (user && user.externalIds) || [];
+  const capIdShaped = [];
+
+  for (let i = 0; i < externalIds.length; i++) {
+    const entry = externalIds[i] || {};
+    const value = String(entry.value || '').trim();
+    if (!/^\d{4,7}$/.test(value)) continue;
+    const label = (String(entry.type || '') + ' ' + String(entry.customType || '')).toUpperCase();
+    if (label.indexOf('CAP') !== -1) return value;
+    capIdShaped.push(value);
+  }
+
+  return capIdShaped.length ? capIdShaped[0] : '';
+}
+
+/**
+ * Unit number from a Workspace account's org unit path.
+ *
+ * The OU tree nests the echelons and names each one for its charter
+ * ('/CA-001/CA-153'), so the last segment is the unit the account belongs to.
+ * The wing prefix is read rather than assumed, so this works for any wing
+ * running the hub.
+ *
+ * @param {Object|null} user - A Directory user resource
+ * @returns {string} - The unit number, or '' when the path carries none
+ */
+function getDirectoryUnitNumber(user) {
+  const ouPath = String((user && user.orgUnitPath) || '');
+  const matches = ouPath.match(/[A-Za-z]{2}-\d{3}/g);
+  if (!matches || !matches.length) return '';
+  return matches[matches.length - 1].split('-')[1];
 }
 
 /**
@@ -194,7 +278,8 @@ function getUserNameFromEmail(userEmail) {
 function doGet(e) {
   const startTime = new Date();
   const userEmail = Session.getActiveUser().getEmail() || 'Unknown';
-  const userName = getUserFullName(userEmail);
+  const directoryUser = getDirectoryUser(userEmail);
+  const userName = (directoryUser && directoryUser.name && directoryUser.name.fullName) || 'Unknown';
   let status = 'SUCCESS';
   let errorMessage = '';
   let errorStack = '';
@@ -206,7 +291,14 @@ function doGet(e) {
     Logger.log("====================================");
 
     const appShortName = getConfig('APP_SHORT_NAME', 'Readiness Hub');
-    const htmlOutput = HtmlService.createTemplateFromFile('Index')
+    const template = HtmlService.createTemplateFromFile('Index');
+    // Written into the page rather than fetched from it, so the unit picker
+    // knows whose unit to open on before the first paint instead of switching
+    // units under the user a moment later. '<' can only reach this through a
+    // malformed directory record, but it would close the script tag if it did.
+    template.activeUserJson = JSON.stringify(buildActiveUserIdentity(userEmail, directoryUser))
+      .replace(/</g, '\\u003c');
+    const htmlOutput = template
       .evaluate()
       .setTitle(appShortName)
       .addMetaTag('viewport', 'width=device-width, initial-scale=1')

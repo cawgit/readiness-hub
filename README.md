@@ -150,6 +150,24 @@ Configuration is stored securely in Script Properties (not in the code):
    - Interval: Every hour
 4. Save
 
+### 6. Help the Hub Recognize Who Signs In (Optional)
+
+The hub opens on the signed-in user's own unit, so people land on their squadron
+instead of on wing HQ. It identifies them in this order, stopping at the first
+match:
+
+1. The CAP ID on their Google Workspace account (**Directory** > **Users** >
+   *user* > **User information** > **Employee ID / external IDs**). Label the ID
+   `CAPID` if you keep other numbers there too.
+2. The email address on their CAPWATCH member record. Members who list their
+   Workspace address in eServices are matched without any admin setup.
+3. The unit number in their org unit path, if your OU tree names its units for
+   their charters (`/CA-001/CA-010/CA-111` resolves to unit 111).
+
+None of this is a permission check — every unit stays selectable, and this only
+decides which one is showing on arrival. Accounts that match nothing, including
+service accounts and staff assigned above the wing, open on wing HQ.
+
 ## CAPWATCH Data Requirements
 
 The app expects these CAPWATCH export files in your source folder:

@@ -40,6 +40,11 @@
 
     <?!= include('Styles') ?>
 
+    <!-- WHO IS LOOKING AT THIS PAGE (set by doGet; see resolveHomeUnit) -->
+    <script>
+      window.ACTIVE_USER = <?!= activeUserJson ?>;
+    </script>
+
     <!-- CONFIGURATION (no dependencies) -->
     <?!= include('ConfigConstants') ?>
     <?!= include('ConfigPromotionRules') ?>
@@ -132,6 +137,65 @@
       // write them. Leaves digit-led tokens alone ("45TH" stays "45th").
       const toTitleCase = (name) =>
         String(name || '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+      // The unit the signed-in user belongs to, which is where the picker
+      // should open rather than at wing HQ. Returns null when the viewer cannot
+      // be placed inside the extract - a service account, or region staff whose
+      // own unit sits above it - and the caller falls back to the wing.
+      //
+      // Three ways in, because no one of them is filled in for everybody: the
+      // CAP ID recorded on their Workspace account, the email their member
+      // record carries, and the unit number in their org unit path. The two
+      // that name a member are tried first; the OU path describes where an
+      // account was filed, which is a hint about the person, not a statement.
+      //
+      // Nothing here is a permission check. Every unit stays selectable - this
+      // only decides which one is showing on arrival.
+      const resolveHomeUnit = (identity, units, members, contacts) => {
+        if (!identity || !units.length) return null;
+
+        const unitByOrgId = new Map(units.map(u => [String(u.id || '').trim(), u]));
+        // Only a unit that survived into the picker can be selected, so a
+        // member assigned outside it resolves to nothing rather than to a value
+        // the dropdown would quietly refuse.
+        const unitFor = (orgId) => unitByOrgId.get(String(orgId || '').trim()) || null;
+
+        // A lapsed record should not decide anything: someone who transferred
+        // still has their old membership in the extract.
+        const activeMembers = members.filter(m => String(m.MbrStatus || '').toUpperCase() === 'ACTIVE');
+        const unitForCapId = (capid) => {
+          const cap = String(capid || '').trim();
+          if (!cap) return null;
+          const member = activeMembers.find(m => String(m.CAPID || '').trim() === cap);
+          return member ? unitFor(member.ORGID) : null;
+        };
+
+        const byCapId = unitForCapId(identity.capid);
+        if (byCapId) return byCapId.id;
+
+        // One address can sit on several records - a cadet and a parent sharing
+        // an inbox, or a duplicate nobody cleaned up. Landing on two different
+        // units means we cannot say which is theirs, so the wing default holds.
+        const email = String(identity.email || '').trim().toLowerCase();
+        if (email) {
+          const emailUnitIds = new Set();
+          contacts.forEach(c => {
+            if (String(c.Type || '').toUpperCase() !== 'EMAIL') return;
+            if (String(c.Contact || '').trim().toLowerCase() !== email) return;
+            const unit = unitForCapId(c.CAPID);
+            if (unit) emailUnitIds.add(unit.id);
+          });
+          if (emailUnitIds.size === 1) return Array.from(emailUnitIds)[0];
+        }
+
+        const unitNum = padUnitNum(identity.unitNum);
+        if (unitNum) {
+          const byUnitNum = units.filter(u => u.unitNum === unitNum);
+          if (byUnitNum.length === 1) return byUnitNum[0].id;
+        }
+
+        return null;
+      };
 
       // The loading screen tells people how much data it is working through.
       // Those numbers are measured from the extract instead of written into the
@@ -596,13 +660,25 @@
         const availableUnits = unitPicker.units;
         const unitOptionGroups = unitPicker.optionGroups;
 
+        // Recomputed from the data rather than remembered, so a refreshed
+        // extract that moves someone follows them on their next visit.
+        const homeUnitId = useMemo(() => resolveHomeUnit(
+          window.ACTIVE_USER,
+          availableUnits,
+          dataFiles.members || [],
+          dataFiles.contacts || []
+        ), [availableUnits, dataFiles.members, dataFiles.contacts]);
+
         useEffect(() => {
-            // First entry is now the highest echelon in the data (the wing for
-            // a wing-scoped extract) rather than the lowest-numbered squadron.
+            // The viewer's own unit if we can place them in the extract. Failing
+            // that, the first entry - now the highest echelon in the data (the
+            // wing for a wing-scoped extract) rather than the lowest-numbered
+            // squadron. Only fills an empty selection, so it never pulls the
+            // dropdown back off a unit the viewer chose themselves.
             if (!unitFilter && availableUnits.length > 0) {
-                setUnitFilter(availableUnits[0].id);
+                setUnitFilter(homeUnitId || availableUnits[0].id);
             }
-        }, [availableUnits]);
+        }, [availableUnits, homeUnitId]);
 
         useEffect(() => {
           setSelectedReport(null);
