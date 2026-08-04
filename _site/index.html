@@ -11193,6 +11193,20 @@ const ReferenceModal = ({
                   <span className="font-bold block text-amber-800 mb-1">Amber Dots on Member Cards</span>
                   <p>An amber dot on a level indicator means all modules are done but the path is waiting to be submitted or approved in eServices.</p>
                 </div>
+                <div className="bg-emerald-50 p-4 rounded-lg border border-emerald-100">
+                  <span className="font-bold block text-emerald-800 mb-1">Green Rings on Member Cards</span>
+                  <div className="flex items-start gap-3 mt-2">
+                    <div className="shrink-0 pt-0.5">
+                      <div className="w-8 h-8 flex items-center justify-center rounded-full border-2 border-blue-600 bg-blue-600 ring-2 ring-emerald-500 ring-offset-1 ring-offset-white">
+                        <span className="text-xs font-bold text-white">3</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <p>A green ring around a level indicator means that member is a <strong>Volunteer University instructor</strong> for that level. Hover the circle to see whether they teach it face-to-face, online, or both, and whether they chair the course.</p>
+                      <p>Instructor data comes from the <span className="font-mono text-xs">PL_VolUInstructors</span> CAPWATCH file. If no rings appear anywhere, that file is likely missing from the extract. For a unit-wide view of who can teach what, run the <strong>VU Instructor Coverage</strong> report.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </section>
 
