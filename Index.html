@@ -133,6 +133,36 @@
       const toTitleCase = (name) =>
         String(name || '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
+      // The loading screen tells people how much data it is working through.
+      // Those numbers are measured from the extract instead of written into the
+      // copy, so they stay true as the wing grows or as another wing runs this.
+      // Units are counted from the members themselves: an org record with
+      // nobody assigned to it is not a unit anyone is waiting on.
+      const measureDataScale = (data) => {
+        const members = (data && data.members) || [];
+        const orgIds = new Set();
+        members.forEach(m => {
+          const orgId = String(m.ORGID || '').trim();
+          if (orgId) orgIds.add(orgId);
+        });
+        return { members: members.length, units: orgIds.size };
+      };
+
+      // Counts from the previous visit, so the very first status line can carry
+      // numbers instead of waiting for the payload to finish parsing. A first
+      // run has nothing stored and falls back to copy without numbers.
+      const readStoredDataScale = () => {
+        try {
+          const stored = JSON.parse(localStorage.getItem(DATA_CONSTANTS.SCALE_KEY) || 'null');
+          if (stored && stored.members > 0) {
+            return { members: stored.members, units: stored.units || 0 };
+          }
+        } catch (e) {
+          // Unreadable or absent - the generic copy is a fine fallback
+        }
+        return { members: 0, units: 0 };
+      };
+
       function App() {
         const [activeTab, setActiveTab] = useState('home');
         const [showReference, setShowReference] = useState(false);
@@ -142,6 +172,7 @@
         const [searchQuery, setSearchQuery] = useState("");
         const [loading, setLoading] = useState(true);
         const [loadingStatus, setLoadingStatus] = useState("Checking local cache...");
+        const [dataScale, setDataScale] = useState(readStoredDataScale);
         const [lastUpdated, setLastUpdated] = useState("");
         
         const [configFiles, setConfigFiles] = useState({ paths: [], groups: [], tasks: [], assignments: [], lookups: [], cadetAchvEnum: [] });
@@ -248,8 +279,16 @@
           const service = createDataService();
           service.initialize(result);
           setDataService(service);
-          setDataFiles(service.rawData());
+          const rawData = service.rawData();
+          setDataFiles(rawData);
           setConfigFiles(service.rawConfig());
+          const scale = measureDataScale(rawData);
+          setDataScale(scale);
+          try {
+            localStorage.setItem(DATA_CONSTANTS.SCALE_KEY, JSON.stringify(scale));
+          } catch (e) {
+            // Same as the payload cache: storage is optional, fail quietly
+          }
           if (result.meta && result.meta.lastUpdated) {
             setLastUpdated(result.meta.lastUpdated);
           }
@@ -287,8 +326,12 @@
           if (!loading) return;
           const rotation = [
             "Reviewing the local ops log...",
-            "Analyzing over 1,400 members profiles...",
-            "Preparing insights for nearly 40 units...",
+            dataScale.members
+              ? `Analyzing ${dataScale.members.toLocaleString()} member profiles...`
+              : "Analyzing member profiles...",
+            dataScale.units
+              ? `Preparing insights for ${dataScale.units} units...`
+              : "Preparing insights for every unit...",
             "Checking in with headquarters...",
             "Syncing personnel and training records...",
             "Lining up the promotion requirements...",
@@ -303,7 +346,7 @@
             });
           }, 1800);
           return () => clearInterval(intervalId);
-        }, [loading]);
+        }, [loading, dataScale]);
 
         useEffect(() => {
           const loadData = () => {
@@ -758,7 +801,7 @@
           const parseDateValue = (value) => {
             if (!value) return null;
             const raw = String(value).trim();
-            if (!raw || raw === '01/01/1900') return null;
+            if (isPlaceholderDate(raw)) return null;
             const parsed = new Date(raw);
             if (Number.isNaN(parsed.getTime())) return null;
             return { raw, date: parsed };
@@ -1002,7 +1045,7 @@
         };
 
         const parseDateSafe = (value) => {
-          if (!value || value === '01/01/1900') return null;
+          if (isPlaceholderDate(value)) return null;
           if (value instanceof Date) {
             return Number.isNaN(value.getTime()) ? null : value;
           }
@@ -2375,7 +2418,7 @@
           const threshold = 90 * 24 * 60 * 60 * 1000;
 
           activeMembers.forEach(member => {
-            if (!member.Expiration || member.Expiration === '12/31/9998' || member.Expiration === '12/31/9999') return;
+            if (!hasExpirationDate(member.Expiration)) return;
 
             const expirationDate = new Date(member.Expiration);
             const daysUntilExpiration = Math.floor((expirationDate - today) / (1000 * 60 * 60 * 24));
@@ -2634,7 +2677,7 @@
           const normalizeDateValue = (dateString) => {
             if (!dateString) return null;
             const normalized = `${dateString}`.trim();
-            if (!normalized || normalized === '01/01/1900' || normalized === '1900-01-01') return null;
+            if (isPlaceholderDate(normalized)) return null;
             return normalized;
           };
 
@@ -2974,8 +3017,8 @@
             if (dataFiles.cadetAchv && dataFiles.cadetAchv.length) {
               const achievements = dataFiles.cadetAchv.filter(a => String(a.CAPID).trim() === String(cadet.CAPID).trim());
               const completedAchievements = achievements.filter(a =>
-                a.PhyFitTest && a.PhyFitTest !== '01/01/1900' &&
-                a.LeadLabDateP && a.LeadLabDateP !== '01/01/1900' &&
+                hasRealDate(a.PhyFitTest) &&
+                hasRealDate(a.LeadLabDateP) &&
                 a.ActivePart && String(a.ActivePart).toUpperCase() === 'TRUE'
               );
               if (completedAchievements.length > 0) {
@@ -3010,10 +3053,10 @@
               const nextAchvData = achievements.find(a => parseInt(a.CadetAchvID) === nextAchievementId);
               if (nextAchvData) {
                 fallbackSummary = {
-                  leadership: nextAchvData.LeadLabDateP && nextAchvData.LeadLabDateP !== '01/01/1900',
-                  aerospace: nextAchvData.AEDateP && nextAchvData.AEDateP !== '01/01/1900',
-                  fitness: nextAchvData.PhyFitTest && nextAchvData.PhyFitTest !== '01/01/1900',
-                  character: nextAchvData.MoralLDateP && nextAchvData.MoralLDateP !== '01/01/1900',
+                  leadership: hasRealDate(nextAchvData.LeadLabDateP),
+                  aerospace: hasRealDate(nextAchvData.AEDateP),
+                  fitness: hasRealDate(nextAchvData.PhyFitTest),
+                  character: hasRealDate(nextAchvData.MoralLDateP),
                   activity: nextAchvData.ActivePart && String(nextAchvData.ActivePart).toUpperCase() === 'TRUE'
                 };
               }
@@ -3288,7 +3331,7 @@
               const activities = (dataFiles.cadetActivities || []).filter(a =>
                 String(a.CAPID).trim() === String(c.CAPID).trim() &&
                 (a.Type || '').toUpperCase().includes('ENCAMP') &&
-                a.Completed && a.Completed !== '01/01/1900'
+                hasRealDate(a.Completed)
               );
               return activities.length > 0;
             }).length;
@@ -4287,7 +4330,7 @@
           const membersExpiringSoon = [];
 
           memberPool.forEach(member => {
-            if (!member.Expiration || member.Expiration === '12/31/9998' || member.Expiration === '12/31/9999') return;
+            if (!hasExpirationDate(member.Expiration)) return;
 
             const expirationDate = new Date(member.Expiration);
             const daysUntilExpiration = Math.floor((expirationDate - today) / (1000 * 60 * 60 * 24));

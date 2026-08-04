@@ -193,7 +193,7 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
           <div>
             <div className="text-xs font-bold text-slate-500 uppercase mb-1">Completed</div>
             <div className="text-sm text-slate-800">
-              {qualification.completed && qualification.completed !== '01/01/1900'
+              {hasRealDate(qualification.completed)
                 ? qualification.completed
                 : 'N/A'}
             </div>
@@ -202,9 +202,9 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
           <div>
             <div className="text-xs font-bold text-slate-500 uppercase mb-1">Expiration</div>
             <div className="text-sm text-slate-800">
-              {qualification.expiration && qualification.expiration !== '01/01/1900'
+              {hasExpirationDate(qualification.expiration)
                 ? qualification.expiration
-                : 'None'}
+                : (qualification.expiration ? 'Does not expire.' : 'None')}
             </div>
           </div>
 
@@ -397,10 +397,14 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
                       {task.completed && (
                         <div className="text-xs text-emerald-700 mt-1 flex items-center gap-2">
                           <span>Completed: {task.completedDate}</span>
-                          {task.expiration && task.expiration !== '01/01/1900' && (
-                            <span className="text-amber-600">
-                              Expires: {task.expiration}
-                            </span>
+                          {task.expiration && (
+                            hasExpirationDate(task.expiration)
+                              ? <span className="text-amber-600">
+                                  Expires: {task.expiration}
+                                </span>
+                              : <span className="text-slate-500">
+                                  Does not expire.
+                                </span>
                           )}
                         </div>
                       )}

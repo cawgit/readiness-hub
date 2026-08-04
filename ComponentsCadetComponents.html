@@ -188,7 +188,7 @@ const PromotionStatusCard = ({ cadet }) => {
             </div>
           </div>
         </div>
-        <div title={rankDate && rankDate !== '01/01/1900' ? `Date of Rank: ${rankDate}` : ''}>
+        <div title={hasRealDate(rankDate) ? `Date of Rank: ${rankDate}` : ''}>
           <p className="text-xs text-slate-500 uppercase">Promotion Eligible</p>
           {timeInGrade.noFurtherPromotion ? (
             <>
@@ -393,8 +393,8 @@ const PhaseProgressTimeline = ({ currentAchievement, approvedAchievements, honor
     const pickDate = (record) => {
       const created = String(record.DateCreated || '').trim();
       const modified = String(record.DateMod || '').trim();
-      if (created && created !== '01/01/1900') return created;
-      if (modified && modified !== '01/01/1900') return modified;
+      if (hasRealDate(created)) return created;
+      if (hasRealDate(modified)) return modified;
       return null;
     };
     if (approvals.length > 0) {
@@ -408,7 +408,7 @@ const PhaseProgressTimeline = ({ currentAchievement, approvedAchievements, honor
         String(r.CAPID || '').trim() === capid &&
         String(r.AchvName || '').trim().toLowerCase() === name
       );
-      if (match && match.AprDate && match.AprDate !== '01/01/1900') {
+      if (match && hasRealDate(match.AprDate)) {
         return String(match.AprDate).trim();
       }
     }

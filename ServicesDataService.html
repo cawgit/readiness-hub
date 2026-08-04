@@ -251,7 +251,7 @@ function createDataService() {
     .map(t => ({ name: t.Track, level: t.TrackLevel, date: t.DateMod }));
 
   const buildSeniorAwards = (member) => lookupRows(getDataIndexes(_rawData).seniorAwardsByCapid, member.CAPID)
-    .filter(a => a.Completed && a.Completed !== '01/01/1900')
+    .filter(a => hasRealDate(a.Completed))
     .map(a => ({
       award: a.Award,
       awardNo: a.AwardNo,

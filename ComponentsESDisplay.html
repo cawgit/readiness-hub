@@ -38,11 +38,16 @@ const ESQualificationCard = ({
         />
       </div>
       <div className="mt-2 text-xs text-slate-600 space-y-1">
-        {qualification.completed && qualification.completed !== '01/01/1900' && (
+        {hasRealDate(qualification.completed) && (
           <div>Completed: {qualification.completed}</div>
         )}
-        {qualification.expiration && qualification.expiration !== '01/01/1900' && (
-          <div>Expires: {qualification.expiration}</div>
+        {/* A sentinel expiration - 1900 or far-future - means the
+            qualification never expires; an absent one means CAPWATCH told us
+            nothing, so say nothing. */}
+        {qualification.expiration && (
+          hasExpirationDate(qualification.expiration)
+            ? <div>Expires: {qualification.expiration}</div>
+            : <div>Does not expire.</div>
         )}
         {showSkillsEvaluator && qualification.isSkillsEvaluator && (
           <div className="text-amber-700 font-medium flex items-center gap-1 mt-1">

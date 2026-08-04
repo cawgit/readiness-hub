@@ -84,7 +84,7 @@ const CadetProfileModal = ({
                 <div>
                   <div className="text-2xl font-bold text-slate-800">{cadet.currentRank}</div>
                   <div className="text-sm text-slate-600">{getAchievementDisplayName(cadet.currentAchievement)}</div>
-                  {cadet.rankDate && cadet.rankDate !== '01/01/1900' && (
+                  {hasRealDate(cadet.rankDate) && (
                     <div className="text-xs text-slate-500 mt-1">Date of Rank: {cadet.rankDate}</div>
                   )}
                 </div>

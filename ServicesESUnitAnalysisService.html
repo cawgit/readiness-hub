@@ -530,7 +530,7 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
           byFunctionalArea[functionalArea].active++;
 
           // Check if expiring soon
-          if (q.Expiration && q.Expiration !== '01/01/1900') {
+          if (hasExpirationDate(q.Expiration)) {
             const expDate = new Date(q.Expiration);
             if (expDate >= today && expDate <= in90Days) {
               const daysUntil = Math.floor((expDate - today) / (1000 * 60 * 60 * 24));
@@ -583,7 +583,7 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
       const canEvaluate = [];
       quals.forEach(q => {
         // Must have held qual for 1+ year
-        if (q.Completed && q.Completed !== '01/01/1900') {
+        if (hasRealDate(q.Completed)) {
           const completedDate = new Date(q.Completed);
           const oneYearAgo = new Date();
           oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);

@@ -1,6 +1,6 @@
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.15.1';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.15.2';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -1044,6 +1044,10 @@ const LEVEL2_TASK_TRACKS = {
 // Configuration values for data caching, pagination, and API settings
 const DATA_CONSTANTS = {
   CACHE_KEY: 'cap_data_cache_v5',
+  // Member and unit counts from the last load, kept apart from the payload
+  // cache so the loading screen can quote real numbers before the data itself
+  // has been parsed.
+  SCALE_KEY: 'cap_data_scale_v1',
   CACHE_MAX_AGE_MS: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
   ITEMS_PER_PAGE: 50,
 };

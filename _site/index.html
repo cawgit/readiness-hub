@@ -51,7 +51,7 @@
 
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.15.1';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.15.2';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -1095,6 +1095,10 @@ const LEVEL2_TASK_TRACKS = {
 // Configuration values for data caching, pagination, and API settings
 const DATA_CONSTANTS = {
   CACHE_KEY: 'cap_data_cache_v5',
+  // Member and unit counts from the last load, kept apart from the payload
+  // cache so the loading screen can quote real numbers before the data itself
+  // has been parsed.
+  SCALE_KEY: 'cap_data_scale_v1',
   CACHE_MAX_AGE_MS: 6 * 60 * 60 * 1000, // 6 hours in milliseconds
   ITEMS_PER_PAGE: 50,
 };
@@ -1382,9 +1386,56 @@ const normalizeRank = (rank) => {
 </script>
 
 <script type="text/babel">
+// --- CAPWATCH DATE SENTINELS ---
+// CAPWATCH never leaves a date column empty; it writes a stand-in value, and
+// which one depends on the table. "Nothing here" arrives as a 1900 date -
+// 01/01/1900 on most tables, 01/31/1900 on non-expiring achievements - while
+// "this never lapses" arrives as a far-future date, 12/31/9999 on FIFTY YEAR
+// and INDEFINITE memberships and 12/31/9998 in older extracts. Both ends are
+// tested by year rather than against a list of literals, so a spelling we have
+// not seen yet still reads as a sentinel instead of as a real date.
+
+// The four-digit year in a CAPWATCH date, or null if there isn't one to read.
+// Handles the two shapes the extract uses (MM/DD/YYYY and YYYY-MM-DD) plus the
+// Date objects the app builds from them.
+const capwatchDateYear = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value) ? null : value.getFullYear();
+  const text = String(value).trim();
+  if (!text) return null;
+  const usFormat = text.match(/^\d{1,2}\/\d{1,2}\/(\d{4})/);
+  if (usFormat) return Number(usFormat[1]);
+  const isoFormat = text.match(/^(\d{4})-\d{1,2}-\d{1,2}/);
+  if (isoFormat) return Number(isoFormat[1]);
+  return null;
+};
+
+// No date on file: missing, unparseable, or the 1900 stand-in for one
+const isPlaceholderDate = (value) => {
+  if (!value) return true;
+  if (value instanceof Date && isNaN(value)) return true;
+  const year = capwatchDateYear(value);
+  if (year === null) return false; // Unrecognized format - leave it to the caller
+  return year <= 1900;
+};
+
+// Never lapses: the far-future stand-in. Nothing CAP records legitimately
+// lands in the fifth millennium, so the exact sentinel year does not matter.
+const isNeverExpiresDate = (value) => {
+  const year = capwatchDateYear(value);
+  return year !== null && year >= 9000;
+};
+
+// Convenience inverse, for the common "show it only if we really have one" case
+const hasRealDate = (value) => !isPlaceholderDate(value);
+
+// True only for an expiration that will actually arrive - not a blank, and not
+// a membership or qualification flagged as never expiring
+const hasExpirationDate = (value) => hasRealDate(value) && !isNeverExpiresDate(value);
+
 // Cadet-specific utility functions
 const calculateDaysSince = (dateString) => {
-  if (!dateString || dateString === '01/01/1900') return null;
+  if (isPlaceholderDate(dateString)) return null;
   const date = new Date(dateString);
   const today = new Date();
   const diffTime = Math.abs(today - date);
@@ -1501,7 +1552,7 @@ function createESDataService(rawConfig, rawData) {
     }
 
     // Check if qualification held for 1+ year
-    const completedDate = achv.Completed && achv.Completed !== '01/01/1900'
+    const completedDate = hasRealDate(achv.Completed)
       ? new Date(achv.Completed)
       : null;
 
@@ -1589,7 +1640,7 @@ function createESDataService(rawConfig, rawData) {
       let isExpiringSoon = false;
 
       if (!forCadet || !forDashboard) {
-        expirationDate = achv.Expiration && achv.Expiration !== '01/01/1900'
+        expirationDate = hasExpirationDate(achv.Expiration)
           ? new Date(achv.Expiration)
           : null;
 
@@ -2010,7 +2061,7 @@ function createESDataService(rawConfig, rawData) {
           hasRequired = (_rawData.seniorLevels || []).some(sl =>
             sl.CAPID === capid &&
             sl.Lvl === 'LV1' &&
-            sl.Completed && sl.Completed !== '01/01/1900'
+            hasRealDate(sl.Completed)
           );
 
           // Also check memberPaths for Level 1 completion (search for Level 1 path dynamically)
@@ -2159,7 +2210,7 @@ function createESDataService(rawConfig, rawData) {
           let hasLevel1 = (_rawData.seniorLevels || []).some(sl =>
             sl.CAPID === capid &&
             sl.Lvl === 'LV1' &&
-            sl.Completed && sl.Completed !== '01/01/1900'
+            hasRealDate(sl.Completed)
           );
 
           // Also check memberPaths for Level 1 completion
@@ -2770,7 +2821,7 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
           byFunctionalArea[functionalArea].active++;
 
           // Check if expiring soon
-          if (q.Expiration && q.Expiration !== '01/01/1900') {
+          if (hasExpirationDate(q.Expiration)) {
             const expDate = new Date(q.Expiration);
             if (expDate >= today && expDate <= in90Days) {
               const daysUntil = Math.floor((expDate - today) / (1000 * 60 * 60 * 24));
@@ -2823,7 +2874,7 @@ function createESUnitAnalysisService(rawConfig, rawData, esDataService) {
       const canEvaluate = [];
       quals.forEach(q => {
         // Must have held qual for 1+ year
-        if (q.Completed && q.Completed !== '01/01/1900') {
+        if (hasRealDate(q.Completed)) {
           const completedDate = new Date(q.Completed);
           const oneYearAgo = new Date();
           oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
@@ -3916,7 +3967,7 @@ function createDataService() {
     .map(t => ({ name: t.Track, level: t.TrackLevel, date: t.DateMod }));
 
   const buildSeniorAwards = (member) => lookupRows(getDataIndexes(_rawData).seniorAwardsByCapid, member.CAPID)
-    .filter(a => a.Completed && a.Completed !== '01/01/1900')
+    .filter(a => hasRealDate(a.Completed))
     .map(a => ({
       award: a.Award,
       awardNo: a.AwardNo,
@@ -4109,7 +4160,7 @@ function createCadetDataService() {
   // "Upon Joining" - a new cadet is eligible for Achievement 1 immediately.
   // Pass null for C/Col, where no further cadet promotion exists.
   const getTimeInGrade = (rankDate, tigDays = CADET_TIME_IN_GRADE_DAYS) => {
-    if (!rankDate || rankDate === '01/01/1900') return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
+    if (isPlaceholderDate(rankDate)) return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
     const days = calculateDaysSince(rankDate);
     const weeks = Math.floor(days / 7);
 
@@ -4148,7 +4199,7 @@ function createCadetDataService() {
     const allHFZRecords = _rawData.cadetHFZ
       .filter(h => {
         const hfzCapid = String(h.CAPID || '').trim();
-        const hasValidDate = h.DateTaken && h.DateTaken !== '01/01/1900' && h.DateTaken !== '';
+        const hasValidDate = hasRealDate(h.DateTaken);
         return hfzCapid === normalizedCapid && hasValidDate;
       })
       .map(h => ({
@@ -4243,7 +4294,7 @@ function createCadetDataService() {
 
   const checkEncampment = (capid) => {
     const encampments = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a =>
-      a.Type === 'ENCAMP' && a.Completed && a.Completed !== '01/01/1900'
+      a.Type === 'ENCAMP' && hasRealDate(a.Completed)
     );
     return {
       completed: encampments.length > 0,
@@ -4257,7 +4308,7 @@ function createCadetDataService() {
     const activities = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a => {
       const activityType = String(a.Type || '').toUpperCase();
       const isCLS = clsTypes.includes(activityType) || activityType.startsWith('COS');
-      return isCLS && a.Completed && a.Completed !== '01/01/1900';
+      return isCLS && hasRealDate(a.Completed);
     });
     return {
       completed: activities.length > 0,
@@ -4418,7 +4469,7 @@ function createCadetDataService() {
         }
 
         // PRIORITY 2: If not found in new system, check OLD system (Learn to Lead via CadetAchv table)
-        if (!leadershipCompleted && achvData.LeadLabDateP && achvData.LeadLabDateP !== '01/01/1900') {
+        if (!leadershipCompleted && hasRealDate(achvData.LeadLabDateP)) {
           const score = parseInt(achvData.LeadLabScore) || 0;
           leadershipCompleted = score >= CADET_MIN_TEST_SCORE;
           leadershipValue = `${score}% on ${achvData.LeadLabDateP} (Learn to Lead)`;
@@ -4453,7 +4504,7 @@ function createCadetDataService() {
         }
 
         // PRIORITY 2: If not found in new system, check OLD system (Written Aerospace Test via CadetAchv table)
-        if (!aerospaceCompleted && achvData && achvData.AEDateP && achvData.AEDateP !== '01/01/1900') {
+        if (!aerospaceCompleted && achvData && hasRealDate(achvData.AEDateP)) {
           const score = parseInt(achvData.AEScore) || 0;
           aerospaceCompleted = score >= CADET_MIN_TEST_SCORE;
           aerospaceValue = `${score}% on ${achvData.AEDateP} (Written Test)`;
@@ -4464,7 +4515,7 @@ function createCadetDataService() {
       }
 
       // Check Drill Test (only for pre-Billy Mitchell non-milestone achievements)
-      if (requirements.drillTest && achvData.DrillDate && achvData.DrillDate !== '01/01/1900') {
+      if (requirements.drillTest && hasRealDate(achvData.DrillDate)) {
         const score = parseInt(achvData.DrillScore) || 0;
         const drillCompleted = score > 0 || taskDrillTest;
         requirements.drillTest.completed = drillCompleted;
@@ -4477,7 +4528,7 @@ function createCadetDataService() {
       // Check Staff Duty Analysis (post-Billy Mitchell requirement) - three parts
       // Check BOTH old system (CadetAchv fields) and new system (PL_MemberTaskCredit)
       if (requirements.sdaService) {
-        if (achvData.StaffServiceDate && achvData.StaffServiceDate !== '01/01/1900') {
+        if (hasRealDate(achvData.StaffServiceDate)) {
           requirements.sdaService.completed = true;
           requirements.sdaService.value = `Completed on ${achvData.StaffServiceDate}`;
         } else {
@@ -4490,7 +4541,7 @@ function createCadetDataService() {
         }
       }
       if (requirements.sdaPresentation) {
-        if (achvData.OralPresentationDate && achvData.OralPresentationDate !== '01/01/1900') {
+        if (hasRealDate(achvData.OralPresentationDate)) {
           requirements.sdaPresentation.completed = true;
           requirements.sdaPresentation.value = `Completed on ${achvData.OralPresentationDate}`;
         } else {
@@ -4503,7 +4554,7 @@ function createCadetDataService() {
         }
       }
       if (requirements.sdaWriting) {
-        if (achvData.TechnicalWritingAssignmentDate && achvData.TechnicalWritingAssignmentDate !== '01/01/1900') {
+        if (hasRealDate(achvData.TechnicalWritingAssignmentDate)) {
           requirements.sdaWriting.completed = true;
           requirements.sdaWriting.value = `Completed on ${achvData.TechnicalWritingAssignmentDate}`;
         } else {
@@ -4531,7 +4582,7 @@ function createCadetDataService() {
 
       // Check Character Development Forum (if required for this achievement)
       if (requirements.characterDevelopment) {
-        if (achvData.MoralLDateP && achvData.MoralLDateP !== '01/01/1900') {
+        if (hasRealDate(achvData.MoralLDateP)) {
           requirements.characterDevelopment.completed = true;
           requirements.characterDevelopment.value = `Completed on ${achvData.MoralLDateP}`;
         } else if (taskCharacterForum) {
@@ -4798,11 +4849,9 @@ function createCadetDataService() {
       aerospaceModuleTasks.every(taskId => isTaskCompleted(taskId));
 
     // Check if BOTH written tests passed
-    const leadershipTestPassed = achvData && achvData.LeadLabDateP &&
-      achvData.LeadLabDateP !== '01/01/1900' &&
+    const leadershipTestPassed = achvData && hasRealDate(achvData.LeadLabDateP) &&
       parseInt(achvData.LeadLabScore) >= CADET_MIN_TEST_SCORE;
-    const aerospaceTestPassed = achvData && achvData.AEDateP &&
-      achvData.AEDateP !== '01/01/1900' &&
+    const aerospaceTestPassed = achvData && hasRealDate(achvData.AEDateP) &&
       parseInt(achvData.AEScore) >= CADET_MIN_TEST_SCORE;
 
     // Honor Credit earned if ALL FOUR conditions met
@@ -4864,7 +4913,7 @@ function createCadetDataService() {
 
   const getMilestoneAwards = (capid) => {
     return lookupRows(dataIdx().cadetAwardsByCapid, capid)
-      .filter(a => a.Completed && a.Completed !== '01/01/1900')
+      .filter(a => hasRealDate(a.Completed))
       .map(a => ({ award: a.Award, awardNo: a.AwardNo, completed: a.Completed }));
   };
 
@@ -4931,7 +4980,7 @@ function createCadetDataService() {
         effectiveDate = cadet.Joined || effectiveDate;
       } else {
         const achvApprovalDate = getAchievementApprovalDate(cadet.CAPID, currentAchievement);
-        if (achvApprovalDate && achvApprovalDate !== '01/01/1900') {
+        if (hasRealDate(achvApprovalDate)) {
           effectiveDate = achvApprovalDate;
         }
       }
@@ -6745,7 +6794,7 @@ const PromotionStatusCard = ({ cadet }) => {
             </div>
           </div>
         </div>
-        <div title={rankDate && rankDate !== '01/01/1900' ? `Date of Rank: ${rankDate}` : ''}>
+        <div title={hasRealDate(rankDate) ? `Date of Rank: ${rankDate}` : ''}>
           <p className="text-xs text-slate-500 uppercase">Promotion Eligible</p>
           {timeInGrade.noFurtherPromotion ? (
             <>
@@ -6950,8 +6999,8 @@ const PhaseProgressTimeline = ({ currentAchievement, approvedAchievements, honor
     const pickDate = (record) => {
       const created = String(record.DateCreated || '').trim();
       const modified = String(record.DateMod || '').trim();
-      if (created && created !== '01/01/1900') return created;
-      if (modified && modified !== '01/01/1900') return modified;
+      if (hasRealDate(created)) return created;
+      if (hasRealDate(modified)) return modified;
       return null;
     };
     if (approvals.length > 0) {
@@ -6965,7 +7014,7 @@ const PhaseProgressTimeline = ({ currentAchievement, approvedAchievements, honor
         String(r.CAPID || '').trim() === capid &&
         String(r.AchvName || '').trim().toLowerCase() === name
       );
-      if (match && match.AprDate && match.AprDate !== '01/01/1900') {
+      if (match && hasRealDate(match.AprDate)) {
         return String(match.AprDate).trim();
       }
     }
@@ -7362,11 +7411,16 @@ const ESQualificationCard = ({
         />
       </div>
       <div className="mt-2 text-xs text-slate-600 space-y-1">
-        {qualification.completed && qualification.completed !== '01/01/1900' && (
+        {hasRealDate(qualification.completed) && (
           <div>Completed: {qualification.completed}</div>
         )}
-        {qualification.expiration && qualification.expiration !== '01/01/1900' && (
-          <div>Expires: {qualification.expiration}</div>
+        {/* A sentinel expiration - 1900 or far-future - means the
+            qualification never expires; an absent one means CAPWATCH told us
+            nothing, so say nothing. */}
+        {qualification.expiration && (
+          hasExpirationDate(qualification.expiration)
+            ? <div>Expires: {qualification.expiration}</div>
+            : <div>Does not expire.</div>
         )}
         {showSkillsEvaluator && qualification.isSkillsEvaluator && (
           <div className="text-amber-700 font-medium flex items-center gap-1 mt-1">
@@ -7687,7 +7741,7 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
           <div>
             <div className="text-xs font-bold text-slate-500 uppercase mb-1">Completed</div>
             <div className="text-sm text-slate-800">
-              {qualification.completed && qualification.completed !== '01/01/1900'
+              {hasRealDate(qualification.completed)
                 ? qualification.completed
                 : 'N/A'}
             </div>
@@ -7696,9 +7750,9 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
           <div>
             <div className="text-xs font-bold text-slate-500 uppercase mb-1">Expiration</div>
             <div className="text-sm text-slate-800">
-              {qualification.expiration && qualification.expiration !== '01/01/1900'
+              {hasExpirationDate(qualification.expiration)
                 ? qualification.expiration
-                : 'None'}
+                : (qualification.expiration ? 'Does not expire.' : 'None')}
             </div>
           </div>
 
@@ -7891,10 +7945,14 @@ const ESQualificationDetailModal = ({ isOpen, onClose, qualification, member, da
                       {task.completed && (
                         <div className="text-xs text-emerald-700 mt-1 flex items-center gap-2">
                           <span>Completed: {task.completedDate}</span>
-                          {task.expiration && task.expiration !== '01/01/1900' && (
-                            <span className="text-amber-600">
-                              Expires: {task.expiration}
-                            </span>
+                          {task.expiration && (
+                            hasExpirationDate(task.expiration)
+                              ? <span className="text-amber-600">
+                                  Expires: {task.expiration}
+                                </span>
+                              : <span className="text-slate-500">
+                                  Does not expire.
+                                </span>
                           )}
                         </div>
                       )}
@@ -10071,7 +10129,7 @@ const CadetProfileModal = ({
                 <div>
                   <div className="text-2xl font-bold text-slate-800">{cadet.currentRank}</div>
                   <div className="text-sm text-slate-600">{getAchievementDisplayName(cadet.currentAchievement)}</div>
-                  {cadet.rankDate && cadet.rankDate !== '01/01/1900' && (
+                  {hasRealDate(cadet.rankDate) && (
                     <div className="text-xs text-slate-500 mt-1">Date of Rank: {cadet.rankDate}</div>
                   )}
                 </div>
@@ -13182,7 +13240,7 @@ const HQStaffInsights = ({
 
     // Members expiring soon (within 90 days)
     const membersExpiringSoon = staffMembers.filter(m => {
-      if (!m.Expiration || m.Expiration === '12/31/9998' || m.Expiration === '12/31/9999') return false;
+      if (!hasExpirationDate(m.Expiration)) return false;
       const expDate = parseDateSafe(m.Expiration);
       if (!expDate) return false;
       const daysUntil = Math.floor((expDate - today) / (1000 * 60 * 60 * 24));
@@ -20375,7 +20433,7 @@ function FloatingHelpAndModals(props) {
     const parseDateValue = (value) => {
       if (!value) return null;
       const raw = String(value).trim();
-      if (!raw || raw === '01/01/1900') return null;
+      if (isPlaceholderDate(raw)) return null;
       const parsed = new Date(raw);
       if (Number.isNaN(parsed.getTime())) return null;
       return { raw, date: parsed };
@@ -20702,6 +20760,36 @@ window.importCapwatchZip = async function(file, onProgress) {
       const toTitleCase = (name) =>
         String(name || '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
+      // The loading screen tells people how much data it is working through.
+      // Those numbers are measured from the extract instead of written into the
+      // copy, so they stay true as the wing grows or as another wing runs this.
+      // Units are counted from the members themselves: an org record with
+      // nobody assigned to it is not a unit anyone is waiting on.
+      const measureDataScale = (data) => {
+        const members = (data && data.members) || [];
+        const orgIds = new Set();
+        members.forEach(m => {
+          const orgId = String(m.ORGID || '').trim();
+          if (orgId) orgIds.add(orgId);
+        });
+        return { members: members.length, units: orgIds.size };
+      };
+
+      // Counts from the previous visit, so the very first status line can carry
+      // numbers instead of waiting for the payload to finish parsing. A first
+      // run has nothing stored and falls back to copy without numbers.
+      const readStoredDataScale = () => {
+        try {
+          const stored = JSON.parse(localStorage.getItem(DATA_CONSTANTS.SCALE_KEY) || 'null');
+          if (stored && stored.members > 0) {
+            return { members: stored.members, units: stored.units || 0 };
+          }
+        } catch (e) {
+          // Unreadable or absent - the generic copy is a fine fallback
+        }
+        return { members: 0, units: 0 };
+      };
+
       function App() {
         const [activeTab, setActiveTab] = useState('home');
         const [showReference, setShowReference] = useState(false);
@@ -20712,6 +20800,7 @@ window.importCapwatchZip = async function(file, onProgress) {
         const [loading, setLoading] = useState(true);
         const [showZipImportModal, setShowZipImportModal] = useState(false);
         const [loadingStatus, setLoadingStatus] = useState("Checking local cache...");
+        const [dataScale, setDataScale] = useState(readStoredDataScale);
         const [lastUpdated, setLastUpdated] = useState("");
         
         const [configFiles, setConfigFiles] = useState({ paths: [], groups: [], tasks: [], assignments: [], lookups: [], cadetAchvEnum: [] });
@@ -20828,8 +20917,16 @@ window.importCapwatchZip = async function(file, onProgress) {
           const service = createDataService();
           service.initialize(result);
           setDataService(service);
-          setDataFiles(service.rawData());
+          const rawData = service.rawData();
+          setDataFiles(rawData);
           setConfigFiles(service.rawConfig());
+          const scale = measureDataScale(rawData);
+          setDataScale(scale);
+          try {
+            localStorage.setItem(DATA_CONSTANTS.SCALE_KEY, JSON.stringify(scale));
+          } catch (e) {
+            // Same as the payload cache: storage is optional, fail quietly
+          }
           if (result.meta && result.meta.lastUpdated) {
             setLastUpdated(result.meta.lastUpdated);
           }
@@ -20867,8 +20964,12 @@ window.importCapwatchZip = async function(file, onProgress) {
           if (!loading) return;
           const rotation = [
             "Reviewing the local ops log...",
-            "Analyzing over 1,400 members profiles...",
-            "Preparing insights for nearly 40 units...",
+            dataScale.members
+              ? `Analyzing ${dataScale.members.toLocaleString()} member profiles...`
+              : "Analyzing member profiles...",
+            dataScale.units
+              ? `Preparing insights for ${dataScale.units} units...`
+              : "Preparing insights for every unit...",
             "Checking in with headquarters...",
             "Syncing personnel and training records...",
             "Lining up the promotion requirements...",
@@ -20883,7 +20984,7 @@ window.importCapwatchZip = async function(file, onProgress) {
             });
           }, 1800);
           return () => clearInterval(intervalId);
-        }, [loading]);
+        }, [loading, dataScale]);
 
         useEffect(() => {
           const loadData = async () => {
@@ -21326,7 +21427,7 @@ window.importCapwatchZip = async function(file, onProgress) {
           const parseDateValue = (value) => {
             if (!value) return null;
             const raw = String(value).trim();
-            if (!raw || raw === '01/01/1900') return null;
+            if (isPlaceholderDate(raw)) return null;
             const parsed = new Date(raw);
             if (Number.isNaN(parsed.getTime())) return null;
             return { raw, date: parsed };
@@ -21570,7 +21671,7 @@ window.importCapwatchZip = async function(file, onProgress) {
         };
 
         const parseDateSafe = (value) => {
-          if (!value || value === '01/01/1900') return null;
+          if (isPlaceholderDate(value)) return null;
           if (value instanceof Date) {
             return Number.isNaN(value.getTime()) ? null : value;
           }
@@ -22943,7 +23044,7 @@ window.importCapwatchZip = async function(file, onProgress) {
           const threshold = 90 * 24 * 60 * 60 * 1000;
 
           activeMembers.forEach(member => {
-            if (!member.Expiration || member.Expiration === '12/31/9998' || member.Expiration === '12/31/9999') return;
+            if (!hasExpirationDate(member.Expiration)) return;
 
             const expirationDate = new Date(member.Expiration);
             const daysUntilExpiration = Math.floor((expirationDate - today) / (1000 * 60 * 60 * 24));
@@ -23202,7 +23303,7 @@ window.importCapwatchZip = async function(file, onProgress) {
           const normalizeDateValue = (dateString) => {
             if (!dateString) return null;
             const normalized = `${dateString}`.trim();
-            if (!normalized || normalized === '01/01/1900' || normalized === '1900-01-01') return null;
+            if (isPlaceholderDate(normalized)) return null;
             return normalized;
           };
 
@@ -23542,8 +23643,8 @@ window.importCapwatchZip = async function(file, onProgress) {
             if (dataFiles.cadetAchv && dataFiles.cadetAchv.length) {
               const achievements = dataFiles.cadetAchv.filter(a => String(a.CAPID).trim() === String(cadet.CAPID).trim());
               const completedAchievements = achievements.filter(a =>
-                a.PhyFitTest && a.PhyFitTest !== '01/01/1900' &&
-                a.LeadLabDateP && a.LeadLabDateP !== '01/01/1900' &&
+                hasRealDate(a.PhyFitTest) &&
+                hasRealDate(a.LeadLabDateP) &&
                 a.ActivePart && String(a.ActivePart).toUpperCase() === 'TRUE'
               );
               if (completedAchievements.length > 0) {
@@ -23578,10 +23679,10 @@ window.importCapwatchZip = async function(file, onProgress) {
               const nextAchvData = achievements.find(a => parseInt(a.CadetAchvID) === nextAchievementId);
               if (nextAchvData) {
                 fallbackSummary = {
-                  leadership: nextAchvData.LeadLabDateP && nextAchvData.LeadLabDateP !== '01/01/1900',
-                  aerospace: nextAchvData.AEDateP && nextAchvData.AEDateP !== '01/01/1900',
-                  fitness: nextAchvData.PhyFitTest && nextAchvData.PhyFitTest !== '01/01/1900',
-                  character: nextAchvData.MoralLDateP && nextAchvData.MoralLDateP !== '01/01/1900',
+                  leadership: hasRealDate(nextAchvData.LeadLabDateP),
+                  aerospace: hasRealDate(nextAchvData.AEDateP),
+                  fitness: hasRealDate(nextAchvData.PhyFitTest),
+                  character: hasRealDate(nextAchvData.MoralLDateP),
                   activity: nextAchvData.ActivePart && String(nextAchvData.ActivePart).toUpperCase() === 'TRUE'
                 };
               }
@@ -23856,7 +23957,7 @@ window.importCapwatchZip = async function(file, onProgress) {
               const activities = (dataFiles.cadetActivities || []).filter(a =>
                 String(a.CAPID).trim() === String(c.CAPID).trim() &&
                 (a.Type || '').toUpperCase().includes('ENCAMP') &&
-                a.Completed && a.Completed !== '01/01/1900'
+                hasRealDate(a.Completed)
               );
               return activities.length > 0;
             }).length;
@@ -24855,7 +24956,7 @@ window.importCapwatchZip = async function(file, onProgress) {
           const membersExpiringSoon = [];
 
           memberPool.forEach(member => {
-            if (!member.Expiration || member.Expiration === '12/31/9998' || member.Expiration === '12/31/9999') return;
+            if (!hasExpirationDate(member.Expiration)) return;
 
             const expirationDate = new Date(member.Expiration);
             const daysUntilExpiration = Math.floor((expirationDate - today) / (1000 * 60 * 60 * 24));

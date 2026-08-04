@@ -77,7 +77,7 @@ function createCadetDataService() {
   // "Upon Joining" - a new cadet is eligible for Achievement 1 immediately.
   // Pass null for C/Col, where no further cadet promotion exists.
   const getTimeInGrade = (rankDate, tigDays = CADET_TIME_IN_GRADE_DAYS) => {
-    if (!rankDate || rankDate === '01/01/1900') return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
+    if (isPlaceholderDate(rankDate)) return { days: 0, weeks: 0, isEligible: false, eligibleDate: null };
     const days = calculateDaysSince(rankDate);
     const weeks = Math.floor(days / 7);
 
@@ -116,7 +116,7 @@ function createCadetDataService() {
     const allHFZRecords = _rawData.cadetHFZ
       .filter(h => {
         const hfzCapid = String(h.CAPID || '').trim();
-        const hasValidDate = h.DateTaken && h.DateTaken !== '01/01/1900' && h.DateTaken !== '';
+        const hasValidDate = hasRealDate(h.DateTaken);
         return hfzCapid === normalizedCapid && hasValidDate;
       })
       .map(h => ({
@@ -211,7 +211,7 @@ function createCadetDataService() {
 
   const checkEncampment = (capid) => {
     const encampments = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a =>
-      a.Type === 'ENCAMP' && a.Completed && a.Completed !== '01/01/1900'
+      a.Type === 'ENCAMP' && hasRealDate(a.Completed)
     );
     return {
       completed: encampments.length > 0,
@@ -225,7 +225,7 @@ function createCadetDataService() {
     const activities = lookupRows(dataIdx().cadetActivitiesByCapid, capid).filter(a => {
       const activityType = String(a.Type || '').toUpperCase();
       const isCLS = clsTypes.includes(activityType) || activityType.startsWith('COS');
-      return isCLS && a.Completed && a.Completed !== '01/01/1900';
+      return isCLS && hasRealDate(a.Completed);
     });
     return {
       completed: activities.length > 0,
@@ -386,7 +386,7 @@ function createCadetDataService() {
         }
 
         // PRIORITY 2: If not found in new system, check OLD system (Learn to Lead via CadetAchv table)
-        if (!leadershipCompleted && achvData.LeadLabDateP && achvData.LeadLabDateP !== '01/01/1900') {
+        if (!leadershipCompleted && hasRealDate(achvData.LeadLabDateP)) {
           const score = parseInt(achvData.LeadLabScore) || 0;
           leadershipCompleted = score >= CADET_MIN_TEST_SCORE;
           leadershipValue = `${score}% on ${achvData.LeadLabDateP} (Learn to Lead)`;
@@ -421,7 +421,7 @@ function createCadetDataService() {
         }
 
         // PRIORITY 2: If not found in new system, check OLD system (Written Aerospace Test via CadetAchv table)
-        if (!aerospaceCompleted && achvData && achvData.AEDateP && achvData.AEDateP !== '01/01/1900') {
+        if (!aerospaceCompleted && achvData && hasRealDate(achvData.AEDateP)) {
           const score = parseInt(achvData.AEScore) || 0;
           aerospaceCompleted = score >= CADET_MIN_TEST_SCORE;
           aerospaceValue = `${score}% on ${achvData.AEDateP} (Written Test)`;
@@ -432,7 +432,7 @@ function createCadetDataService() {
       }
 
       // Check Drill Test (only for pre-Billy Mitchell non-milestone achievements)
-      if (requirements.drillTest && achvData.DrillDate && achvData.DrillDate !== '01/01/1900') {
+      if (requirements.drillTest && hasRealDate(achvData.DrillDate)) {
         const score = parseInt(achvData.DrillScore) || 0;
         const drillCompleted = score > 0 || taskDrillTest;
         requirements.drillTest.completed = drillCompleted;
@@ -445,7 +445,7 @@ function createCadetDataService() {
       // Check Staff Duty Analysis (post-Billy Mitchell requirement) - three parts
       // Check BOTH old system (CadetAchv fields) and new system (PL_MemberTaskCredit)
       if (requirements.sdaService) {
-        if (achvData.StaffServiceDate && achvData.StaffServiceDate !== '01/01/1900') {
+        if (hasRealDate(achvData.StaffServiceDate)) {
           requirements.sdaService.completed = true;
           requirements.sdaService.value = `Completed on ${achvData.StaffServiceDate}`;
         } else {
@@ -458,7 +458,7 @@ function createCadetDataService() {
         }
       }
       if (requirements.sdaPresentation) {
-        if (achvData.OralPresentationDate && achvData.OralPresentationDate !== '01/01/1900') {
+        if (hasRealDate(achvData.OralPresentationDate)) {
           requirements.sdaPresentation.completed = true;
           requirements.sdaPresentation.value = `Completed on ${achvData.OralPresentationDate}`;
         } else {
@@ -471,7 +471,7 @@ function createCadetDataService() {
         }
       }
       if (requirements.sdaWriting) {
-        if (achvData.TechnicalWritingAssignmentDate && achvData.TechnicalWritingAssignmentDate !== '01/01/1900') {
+        if (hasRealDate(achvData.TechnicalWritingAssignmentDate)) {
           requirements.sdaWriting.completed = true;
           requirements.sdaWriting.value = `Completed on ${achvData.TechnicalWritingAssignmentDate}`;
         } else {
@@ -499,7 +499,7 @@ function createCadetDataService() {
 
       // Check Character Development Forum (if required for this achievement)
       if (requirements.characterDevelopment) {
-        if (achvData.MoralLDateP && achvData.MoralLDateP !== '01/01/1900') {
+        if (hasRealDate(achvData.MoralLDateP)) {
           requirements.characterDevelopment.completed = true;
           requirements.characterDevelopment.value = `Completed on ${achvData.MoralLDateP}`;
         } else if (taskCharacterForum) {
@@ -766,11 +766,9 @@ function createCadetDataService() {
       aerospaceModuleTasks.every(taskId => isTaskCompleted(taskId));
 
     // Check if BOTH written tests passed
-    const leadershipTestPassed = achvData && achvData.LeadLabDateP &&
-      achvData.LeadLabDateP !== '01/01/1900' &&
+    const leadershipTestPassed = achvData && hasRealDate(achvData.LeadLabDateP) &&
       parseInt(achvData.LeadLabScore) >= CADET_MIN_TEST_SCORE;
-    const aerospaceTestPassed = achvData && achvData.AEDateP &&
-      achvData.AEDateP !== '01/01/1900' &&
+    const aerospaceTestPassed = achvData && hasRealDate(achvData.AEDateP) &&
       parseInt(achvData.AEScore) >= CADET_MIN_TEST_SCORE;
 
     // Honor Credit earned if ALL FOUR conditions met
@@ -832,7 +830,7 @@ function createCadetDataService() {
 
   const getMilestoneAwards = (capid) => {
     return lookupRows(dataIdx().cadetAwardsByCapid, capid)
-      .filter(a => a.Completed && a.Completed !== '01/01/1900')
+      .filter(a => hasRealDate(a.Completed))
       .map(a => ({ award: a.Award, awardNo: a.AwardNo, completed: a.Completed }));
   };
 
@@ -899,7 +897,7 @@ function createCadetDataService() {
         effectiveDate = cadet.Joined || effectiveDate;
       } else {
         const achvApprovalDate = getAchievementApprovalDate(cadet.CAPID, currentAchievement);
-        if (achvApprovalDate && achvApprovalDate !== '01/01/1900') {
+        if (hasRealDate(achvApprovalDate)) {
           effectiveDate = achvApprovalDate;
         }
       }

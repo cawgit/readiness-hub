@@ -1,6 +1,6 @@
 # CAP Readiness Hub
 
-![Version](https://img.shields.io/badge/version-1.15.1-blue)
+![Version](https://img.shields.io/badge/version-1.15.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A Google Apps Script web application for Civil Air Patrol units to track member readiness, cadet progression, senior member qualifications, and emergency services status.
@@ -137,6 +137,8 @@ Configuration is stored securely in Script Properties (not in the code):
    - Who has access: **Anyone with access** (or restrict to your organization)
 4. Click **Deploy** and copy the web app URL
 
+> Want the hub to appear in the Google Workspace App Launcher (the nine-dot grid)? See [Optional: Add to the Google Workspace App Launcher](#optional-add-to-the-google-workspace-app-launcher) below.
+
 ### 5. Set Up Automated Sync (Recommended)
 
 1. In Apps Script, click the clock icon (Triggers)
@@ -245,6 +247,49 @@ The trigger time avoids the CAPWATCH API daily blackout window (12:00–2:30 AM 
 
 **Credentials** are stored per-user in UserProperties (not in Script Properties). Each admin who needs to run the download must set their own credentials via `setCapwatchAuthorization()`.
 
+## Optional: Add to the Google Workspace App Launcher
+
+To put the hub in the nine-dot App Launcher next to Gmail and Drive, publish it as a **private Google Workspace Marketplace listing** with a Web App integration. There is no setting inside Apps Script or in this repository that does it — the launcher only shows Marketplace-installed apps, so this is entirely a Cloud console + Admin console task, done once per domain by a Workspace super admin.
+
+> **Read this first:** step 1 attaches the script to a standard Cloud project and **cannot be undone**. Every user has to re-authorize afterward, and the Admin SDK APIs behind `AdminDirectory` / `AdminReports` must be re-enabled by hand. Do it when you can tolerate a short outage, not mid-drill-weekend.
+
+### 1. Move the script to a standard Cloud project
+
+1. In the [Cloud console](https://console.cloud.google.com), create a project (or pick an existing one) and note its **Project number** under **Project settings**
+2. Enable the **Admin SDK API** in that project — the `AdminDirectory` and `AdminReports` advanced services stop working without it
+3. In the Apps Script editor, go to **Project Settings** > **Google Cloud Project** > **Change project**, enter the project number, and click **Set project**
+
+### 2. Configure the OAuth consent screen
+
+In the Cloud console under **APIs & Services** > **OAuth consent screen**, set the user type to **Internal** and fill in the app name, support email, and developer contact.
+
+### 3. Enable and configure the Marketplace SDK
+
+1. Enable the **Google Workspace Marketplace SDK** (not the Marketplace *API*) for the project
+2. Open the SDK's **App Configuration** tab and set:
+
+| Field | Value |
+|-------|-------|
+| App visibility | **Private** — restricts install to your domain. **This choice is permanent.** |
+| App integration | **Web App** |
+| Universal navigation URL | Your deployed web app URL (the `/exec` link from step 4 of the Quick Start) |
+| OAuth scopes | The same scopes listed in `appsscript.json` |
+
+3. Fill in the **Store Listing** tab: name, description, developer info, and icons at **96x96** and **48x48** pixels
+4. Save the draft, then **Publish**
+
+Private listings skip Google's review queue, so publishing is immediate.
+
+### 4. Install it for your domain
+
+In the [Admin console](https://admin.google.com), go to **Apps** > **Google Workspace Marketplace apps** > **Apps list** > **Add app** > **Private apps**, select the listing, and install it for everyone or for specific organizational units. The icon appears in the App Launcher for those users, usually within a few minutes.
+
+### Notes
+
+- Because the deployment executes as **the deploying user**, members opening the hub from the launcher will not see a separate consent prompt — the tile is effectively a managed shortcut to the web app URL.
+- Update the universal navigation URL in the Marketplace SDK whenever you create a *new* deployment rather than updating the existing one, or the tile will point at the old version.
+- Users can hide or reorder launcher tiles themselves; admins control which apps are installed, not where each user's icons sit.
+
 ## Optional: Cadet Rank Insignia Images
 
 The cadet dashboard displays rank insignia. By default, these use placeholder Google Drive image IDs.
@@ -303,7 +348,7 @@ This project uses [Semantic Versioning](https://semver.org/) (Major.Minor.Patch)
 - **Minor**: New features and enhancements (backward-compatible)
 - **Patch**: Bug fixes and small tweaks
 
-Current version: **1.15.1** (defined in `ConfigConstants.html`)
+Current version: **1.15.2** (defined in `ConfigConstants.html`)
 
 ### Release Process
 

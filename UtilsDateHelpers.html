@@ -1,7 +1,54 @@
 <script type="text/babel">
+// --- CAPWATCH DATE SENTINELS ---
+// CAPWATCH never leaves a date column empty; it writes a stand-in value, and
+// which one depends on the table. "Nothing here" arrives as a 1900 date -
+// 01/01/1900 on most tables, 01/31/1900 on non-expiring achievements - while
+// "this never lapses" arrives as a far-future date, 12/31/9999 on FIFTY YEAR
+// and INDEFINITE memberships and 12/31/9998 in older extracts. Both ends are
+// tested by year rather than against a list of literals, so a spelling we have
+// not seen yet still reads as a sentinel instead of as a real date.
+
+// The four-digit year in a CAPWATCH date, or null if there isn't one to read.
+// Handles the two shapes the extract uses (MM/DD/YYYY and YYYY-MM-DD) plus the
+// Date objects the app builds from them.
+const capwatchDateYear = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value) ? null : value.getFullYear();
+  const text = String(value).trim();
+  if (!text) return null;
+  const usFormat = text.match(/^\d{1,2}\/\d{1,2}\/(\d{4})/);
+  if (usFormat) return Number(usFormat[1]);
+  const isoFormat = text.match(/^(\d{4})-\d{1,2}-\d{1,2}/);
+  if (isoFormat) return Number(isoFormat[1]);
+  return null;
+};
+
+// No date on file: missing, unparseable, or the 1900 stand-in for one
+const isPlaceholderDate = (value) => {
+  if (!value) return true;
+  if (value instanceof Date && isNaN(value)) return true;
+  const year = capwatchDateYear(value);
+  if (year === null) return false; // Unrecognized format - leave it to the caller
+  return year <= 1900;
+};
+
+// Never lapses: the far-future stand-in. Nothing CAP records legitimately
+// lands in the fifth millennium, so the exact sentinel year does not matter.
+const isNeverExpiresDate = (value) => {
+  const year = capwatchDateYear(value);
+  return year !== null && year >= 9000;
+};
+
+// Convenience inverse, for the common "show it only if we really have one" case
+const hasRealDate = (value) => !isPlaceholderDate(value);
+
+// True only for an expiration that will actually arrive - not a blank, and not
+// a membership or qualification flagged as never expiring
+const hasExpirationDate = (value) => hasRealDate(value) && !isNeverExpiresDate(value);
+
 // Cadet-specific utility functions
 const calculateDaysSince = (dateString) => {
-  if (!dateString || dateString === '01/01/1900') return null;
+  if (isPlaceholderDate(dateString)) return null;
   const date = new Date(dateString);
   const today = new Date();
   const diffTime = Math.abs(today - date);

@@ -51,7 +51,7 @@ function createESDataService(rawConfig, rawData) {
     }
 
     // Check if qualification held for 1+ year
-    const completedDate = achv.Completed && achv.Completed !== '01/01/1900'
+    const completedDate = hasRealDate(achv.Completed)
       ? new Date(achv.Completed)
       : null;
 
@@ -139,7 +139,7 @@ function createESDataService(rawConfig, rawData) {
       let isExpiringSoon = false;
 
       if (!forCadet || !forDashboard) {
-        expirationDate = achv.Expiration && achv.Expiration !== '01/01/1900'
+        expirationDate = hasExpirationDate(achv.Expiration)
           ? new Date(achv.Expiration)
           : null;
 
@@ -560,7 +560,7 @@ function createESDataService(rawConfig, rawData) {
           hasRequired = (_rawData.seniorLevels || []).some(sl =>
             sl.CAPID === capid &&
             sl.Lvl === 'LV1' &&
-            sl.Completed && sl.Completed !== '01/01/1900'
+            hasRealDate(sl.Completed)
           );
 
           // Also check memberPaths for Level 1 completion (search for Level 1 path dynamically)
@@ -709,7 +709,7 @@ function createESDataService(rawConfig, rawData) {
           let hasLevel1 = (_rawData.seniorLevels || []).some(sl =>
             sl.CAPID === capid &&
             sl.Lvl === 'LV1' &&
-            sl.Completed && sl.Completed !== '01/01/1900'
+            hasRealDate(sl.Completed)
           );
 
           // Also check memberPaths for Level 1 completion

@@ -257,7 +257,7 @@ const HQStaffInsights = ({
 
     // Members expiring soon (within 90 days)
     const membersExpiringSoon = staffMembers.filter(m => {
-      if (!m.Expiration || m.Expiration === '12/31/9998' || m.Expiration === '12/31/9999') return false;
+      if (!hasExpirationDate(m.Expiration)) return false;
       const expDate = parseDateSafe(m.Expiration);
       if (!expDate) return false;
       const daysUntil = Math.floor((expDate - today) / (1000 * 60 * 60 * 24));
