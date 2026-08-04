@@ -1967,6 +1967,102 @@
           });
         };
 
+        // Who in the unit can teach which ET levels. Rows are one per level (the
+        // coverage view); meta.instructors carries the per-member roster.
+        const generateVuInstructorReport = (membersOverride = null) => {
+          const memberPool = Array.isArray(membersOverride) ? membersOverride : processedData;
+          const hasSourceData = (dataFiles.voluInstructors || []).length > 0;
+          if (!memberPool.length) {
+            return { rows: [], meta: { instructors: [], totalInstructors: 0, uncoveredLevels: [], seniorsInScope: 0, hasSourceData } };
+          }
+
+          const normalizePath = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+          // Paths that map onto an ET level, so anything left over is a separate
+          // VU course (Squadron/Group/Region Commander Training).
+          const etPaths = new Set();
+          LEVELS.forEach(lvl => {
+            etPaths.add(normalizePath(lvl.pathMatch || lvl.name));
+            if (lvl.fallbackMatch) etPaths.add(normalizePath(lvl.fallbackMatch));
+          });
+
+          const byLevel = {};
+          LEVELS.forEach(lvl => { byLevel[lvl.id] = []; });
+          const instructors = [];
+
+          memberPool.forEach(member => {
+            const capid = String(member.CAPID || '').trim();
+            const entry = voluInstructorIndex.get(capid);
+            if (!entry || entry.courses.size === 0) return;
+
+            const levelQuals = voluInstructorLevelIndex.get(capid) || new Map();
+            const memberLevels = LEVELS
+              .filter(lvl => levelQuals.has(lvl.id))
+              .map(lvl => {
+                const modes = levelQuals.get(lvl.id);
+                return {
+                  levelId: lvl.id,
+                  levelLabel: lvl.label,
+                  levelName: lvl.name,
+                  faceToFace: modes.faceToFace,
+                  online: modes.online,
+                  chair: modes.chair
+                };
+              });
+
+            // Instructors holding only Commander Training still belong on the
+            // roster - they just have no ET level to their name.
+            const otherCourses = Array.from(entry.courses.keys())
+              .filter(pathName => !etPaths.has(normalizePath(pathName)))
+              .sort((a, b) => a.localeCompare(b));
+
+            const instructor = {
+              capid,
+              memberName: `${member.NameLast}, ${member.NameFirst}`,
+              rank: member.Rank,
+              unit: member.memberUnitName,
+              levels: memberLevels,
+              levelSummary: memberLevels.length ? memberLevels.map(l => l.levelLabel).join(', ') : 'None',
+              otherCourses
+            };
+
+            instructors.push(instructor);
+            memberLevels.forEach(l => byLevel[l.levelId].push(instructor));
+          });
+
+          const rows = LEVELS.map(lvl => {
+            const staff = byLevel[lvl.id];
+            const modesFor = (instructor) => instructor.levels.find(l => l.levelId === lvl.id) || {};
+            const chairs = staff.filter(i => modesFor(i).chair);
+            return {
+              levelId: lvl.id,
+              levelLabel: lvl.label,
+              levelName: lvl.name,
+              instructorCount: staff.length,
+              faceToFaceCount: staff.filter(i => modesFor(i).faceToFace).length,
+              onlineCount: staff.filter(i => modesFor(i).online).length,
+              chairCount: chairs.length,
+              coverage: staff.length === 0 ? 'None' : (staff.length === 1 ? 'Single instructor' : 'Covered'),
+              chairNames: chairs.map(i => i.memberName).join('; '),
+              instructorNames: staff.map(i => i.memberName).join('; '),
+              instructors: staff
+            };
+          });
+
+          return {
+            rows,
+            meta: {
+              instructors: instructors.sort((a, b) =>
+                (b.levels.length - a.levels.length) || a.memberName.localeCompare(b.memberName)
+              ),
+              totalInstructors: instructors.length,
+              uncoveredLevels: rows.filter(r => r.instructorCount === 0).map(r => r.levelName),
+              seniorsInScope: memberPool.length,
+              hasSourceData
+            }
+          };
+        };
+
         const generatePromotionEligibilityReport = (membersOverride = null) => {
           const memberPool = Array.isArray(membersOverride) ? membersOverride : processedData;
           if (!memberPool.length) return [];
@@ -4562,6 +4658,15 @@
             generate: (members) => generateMostNeededTraining(members)
           },
           {
+            id: 'vu-instructors',
+            title: 'VU Instructor Coverage',
+            description: 'Volunteer University instructors in the unit and which ET levels each is eligible to teach - highlights levels with no instructor',
+            icon: 'GraduationCap',
+            accent: 'green',
+            tags: ['senior', 'education & training', 'readiness'],
+            generate: (members) => generateVuInstructorReport(members)
+          },
+          {
             id: 'discrepancies',
             title: 'Track/Duty Discrepancies',
             description: 'Find members with duty assignments but missing required specialty tracks',
@@ -6117,7 +6222,8 @@
               'near-promotion',
               'cac-representatives',
               'promotion',
-              'tlc-compliance'
+              'tlc-compliance',
+              'vu-instructors'
             ];
 
           if (report.data && report.data.length > 0) {
@@ -6203,6 +6309,15 @@
               { header: 'Unit', dataKey: 'unit' },
               { header: 'Level', dataKey: 'levelName' },
               { header: 'Status', dataKey: 'status' }
+            ],
+            'vu-instructors': [
+              { header: 'Level', dataKey: (row) => `${row.levelName} (L${row.levelLabel})` },
+              { header: 'Instructors', dataKey: 'instructorCount' },
+              { header: 'F2F', dataKey: 'faceToFaceCount' },
+              { header: 'Online', dataKey: 'onlineCount' },
+              { header: 'Chairs', dataKey: 'chairCount' },
+              { header: 'Coverage', dataKey: 'coverage' },
+              { header: 'Names', dataKey: (row) => row.instructorNames || 'None' }
             ],
             'promotion': [
               { header: 'Member', dataKey: 'memberName' },
