@@ -1011,7 +1011,7 @@
             const completedCount = tasks.filter(t => t.isDone).length;
             const required = parseInt(group.NumberOfRequiredTasks);
             return { groupName: group.GroupName, required, completedCount, isGroupDone: completedCount >= required, tasks };
-          });
+          }).filter(group => group.tasks.length > 0);
 
           return { groups: mappedGroups, track: chosenTrack };
         };
