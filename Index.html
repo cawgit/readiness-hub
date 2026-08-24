@@ -1110,7 +1110,6 @@
         };
 
         const CADET_PROTECTION_CONFIG = {
-          renewalDays: 365,
           dueSoonDays: 60
         };
 
@@ -1299,9 +1298,8 @@
           const now = new Date();
           const isWithinRenewal = (date) => {
             if (!date) return false;
-            const expires = new Date(date);
-            expires.setDate(expires.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
-            return expires >= now;
+            const expires = getCadetProtectionExpirationDate(date);
+            return expires !== null && expires >= now;
           };
           // CAPR 60-2 para 3.2.4: members who complete the Advanced Course "may
           // renew that credential in lieu of renewing their Basic Course
@@ -1326,9 +1324,8 @@
             let expirationDate = null;
             let daysRemaining = null;
             if (lastCompleted) {
-              expirationDate = new Date(lastCompleted);
-              expirationDate.setDate(expirationDate.getDate() + CADET_PROTECTION_CONFIG.renewalDays);
-              daysRemaining = Math.ceil((expirationDate - now) / (1000 * 60 * 60 * 24));
+              expirationDate = getCadetProtectionExpirationDate(lastCompleted);
+              daysRemaining = expirationDate === null ? null : Math.ceil((expirationDate - now) / (1000 * 60 * 60 * 24));
             }
             // A completion is worth reporting even when the course is not
             // required, so the record is never silently dropped.

@@ -46,6 +46,15 @@ const hasRealDate = (value) => !isPlaceholderDate(value);
 // a membership or qualification flagged as never expiring
 const hasExpirationDate = (value) => hasRealDate(value) && !isNeverExpiresDate(value);
 
+// Cadet Protection Basic/Advanced completions don't expire exactly 365 days
+// later - they expire at the end of the 12th month after completion (e.g. a
+// course taken any day in August 2026 expires 08/31/2027, not 08/24/2027).
+const getCadetProtectionExpirationDate = (date) => {
+  const completed = date instanceof Date ? date : new Date(date);
+  if (isNaN(completed)) return null;
+  return new Date(completed.getFullYear() + 1, completed.getMonth() + 1, 0);
+};
+
 // Cadet-specific utility functions
 const calculateDaysSince = (dateString) => {
   if (isPlaceholderDate(dateString)) return null;
