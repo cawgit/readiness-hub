@@ -297,7 +297,8 @@ function createDataService() {
         const trackNameUpper = (track.name || "").toUpperCase().trim();
         const relevantDutyExists = duties.some(d => {
           const mappedTrack = DUTY_TO_TRACK_MAP[(d.name || "").toUpperCase().trim()];
-          return mappedTrack === trackNameUpper;
+          if (!mappedTrack) return false;
+          return trackNameUpper.includes(mappedTrack) || mappedTrack.includes(trackNameUpper);
         });
         if (!relevantDutyExists) { hasDuty = false; warningMsg = "Enrolled (NONE) but no Duty Position assigned."; }
       }
