@@ -641,7 +641,7 @@ const ReferenceModal = ({
                     {Object.entries(DUTY_TO_TRACK_MAP).sort((a, b) => a[0].localeCompare(b[0])).map(([d, t]) => (
                       <tr key={d} className="hover:bg-slate-50">
                         <td className="p-2 capitalize text-slate-700">{d.toLowerCase()}</td>
-                        <td className="p-2 text-blue-600 font-mono text-xs">{t}</td>
+                        <td className="p-2 text-blue-600 font-mono text-xs">{t.join(', ')}</td>
                       </tr>
                     ))}
                   </tbody>

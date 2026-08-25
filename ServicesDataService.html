@@ -276,15 +276,15 @@ function createDataService() {
   const applyDutyTrackWarnings = (duties, tracks) => {
     const dutiesWithStatus = duties.map(duty => {
       const cleanDuty = (duty.name || "").toUpperCase().trim();
-      const requiredTrack = DUTY_TO_TRACK_MAP[cleanDuty];
+      const requiredTracks = DUTY_TO_TRACK_MAP[cleanDuty];
       let hasTrack = true;
       let warningMsg = "";
-      if (requiredTrack) {
+      if (requiredTracks) {
         const hasEnrolled = tracks.some(t => {
           const trackName = (t.name || "").toUpperCase().trim();
-          return trackName.includes(requiredTrack) || requiredTrack.includes(trackName);
+          return requiredTracks.some(rt => trackName.includes(rt) || rt.includes(trackName));
         });
-        if (!hasEnrolled) { hasTrack = false; warningMsg = `Missing Track: ${requiredTrack}`; }
+        if (!hasEnrolled) { hasTrack = false; warningMsg = `Missing Track: ${requiredTracks.join(' or ')}`; }
       }
       return { ...duty, hasTrack, warningMsg };
     });
@@ -296,9 +296,9 @@ function createDataService() {
       if (isNone) {
         const trackNameUpper = (track.name || "").toUpperCase().trim();
         const relevantDutyExists = duties.some(d => {
-          const mappedTrack = DUTY_TO_TRACK_MAP[(d.name || "").toUpperCase().trim()];
-          if (!mappedTrack) return false;
-          return trackNameUpper.includes(mappedTrack) || mappedTrack.includes(trackNameUpper);
+          const mappedTracks = DUTY_TO_TRACK_MAP[(d.name || "").toUpperCase().trim()];
+          if (!mappedTracks) return false;
+          return mappedTracks.some(mt => trackNameUpper.includes(mt) || mt.includes(trackNameUpper));
         });
         if (!relevantDutyExists) { hasDuty = false; warningMsg = "Enrolled (NONE) but no Duty Position assigned."; }
       }

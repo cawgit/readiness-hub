@@ -723,14 +723,14 @@
           
           const dutiesWithStatus = duties.map(duty => {
             const cleanDuty = duty.name.toUpperCase().trim();
-            const requiredTrack = DUTY_TO_TRACK_MAP[cleanDuty];
+            const requiredTracks = DUTY_TO_TRACK_MAP[cleanDuty];
             let hasTrack = true, warningMsg = "";
-            if (requiredTrack) {
+            if (requiredTracks) {
               const hasEnrolled = tracks.some(t => {
                   const trackName = t.name.toUpperCase().trim();
-                  return trackName.includes(requiredTrack) || requiredTrack.includes(trackName);
+                  return requiredTracks.some(rt => trackName.includes(rt) || rt.includes(trackName));
               });
-              if (!hasEnrolled) { hasTrack = false; warningMsg = `Missing Track: ${requiredTrack}`; }
+              if (!hasEnrolled) { hasTrack = false; warningMsg = `Missing Track: ${requiredTracks.join(' or ')}`; }
             }
             return { ...duty, hasTrack, warningMsg };
           });
@@ -741,9 +741,9 @@
             if (isNone) {
               const trackNameUpper = track.name.toUpperCase().trim();
               const relevantDutyExists = duties.some(d => {
-                const mappedTrack = DUTY_TO_TRACK_MAP[d.name.toUpperCase().trim()];
-                if (!mappedTrack) return false;
-                return trackNameUpper.includes(mappedTrack) || mappedTrack.includes(trackNameUpper);
+                const mappedTracks = DUTY_TO_TRACK_MAP[d.name.toUpperCase().trim()];
+                if (!mappedTracks) return false;
+                return mappedTracks.some(mt => trackNameUpper.includes(mt) || mt.includes(trackNameUpper));
               });
               if (!relevantDutyExists) { hasDuty = false; warningMsg = "Enrolled (NONE) but no Duty Position assigned."; }
             }
@@ -1648,8 +1648,8 @@
                filtered = filtered.filter(m => {
                   return m.duties.some(d => {
                       const cleanDuty = d.name.toUpperCase().trim();
-                      const track = DUTY_TO_TRACK_MAP[cleanDuty];
-                      return filters.functionalAreas.includes(track);
+                      const tracks = DUTY_TO_TRACK_MAP[cleanDuty];
+                      return tracks && tracks.some(t => filters.functionalAreas.includes(t));
                   });
                });
             }
@@ -1877,9 +1877,9 @@
           processedData.forEach(m => {
             m.duties.forEach(d => {
               const cleanDuty = d.name.toUpperCase().trim();
-              const functionalArea = DUTY_TO_TRACK_MAP[cleanDuty];
-              if (functionalArea) {
-                functionalAreas.add(functionalArea);
+              const areas = DUTY_TO_TRACK_MAP[cleanDuty];
+              if (areas) {
+                areas.forEach(a => functionalAreas.add(a));
               }
             });
           });
@@ -2013,18 +2013,18 @@
 
             member.duties.forEach(duty => {
               const cleanDuty = duty.name.toUpperCase().trim();
-              const requiredTrack = DUTY_TO_TRACK_MAP[cleanDuty];
+              const requiredTracks = DUTY_TO_TRACK_MAP[cleanDuty];
 
-              if (requiredTrack) {
+              if (requiredTracks) {
                 const hasEnrolled = member.tracks.some(t => {
                   const trackName = t.name.toUpperCase().trim();
-                  return trackName.includes(requiredTrack) || requiredTrack.includes(trackName);
+                  return requiredTracks.some(rt => trackName.includes(rt) || rt.includes(trackName));
                 });
 
                 if (!hasEnrolled) {
                   issues.push({
                     duty: duty.name,
-                    requiredTrack
+                    requiredTrack: requiredTracks.join(' or ')
                   });
                 }
               }
