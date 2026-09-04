@@ -438,14 +438,13 @@ function CadetDashboard(props) {
             const cadetProtection = getCadetProtectionStatus ? getCadetProtectionStatus(cadet) : null;
             const trainingIndicator = getTrainingIndicatorSummary(cadetProtection);
             const trainingIndicatorClass = TRAINING_INDICATOR_STYLES[trainingIndicator.tone] || TRAINING_INDICATOR_STYLES.none;
-            const showCadetProtectionAlert = cadetProtection && cadetProtection.requiredCourses.length > 0 && !cadetProtection.isCompliant;
-            const cpStatus = showCadetProtectionAlert ? (cadetProtection.indicator?.status || 'missing') : null;
-            const cpTone = showCadetProtectionAlert ? (cadetProtection.indicator?.tone || 'bad') : null;
-            const cpBadgeClass = cpTone === 'warn'
-              ? 'bg-amber-100 text-amber-700 border-amber-200'
-              : 'bg-rose-100 text-rose-700 border-rose-200';
-            const cpStatusLabelMap = { overdue: 'Overdue', missing: 'Missing', 'due-soon': 'Due Soon' };
-            const cpBadgeText = cpStatusLabelMap[cpStatus] ? `CP: ${cpStatusLabelMap[cpStatus]}` : 'CP: Needs Attention';
+            // CPPT (Cadet Protection Program Training) badge: shown whenever required,
+            // not just when overdue - green = current, yellow = due soon, red = overdue/missing.
+            const cpRequired = cadetProtection && cadetProtection.requiredCourses.length > 0;
+            const cpTone = cpRequired ? (cadetProtection.indicator?.tone || 'bad') : null;
+            const CPPT_BADGE_STYLES = { good: 'bg-emerald-600', warn: 'bg-amber-500', bad: 'bg-rose-600' };
+            const cpBadgeClass = CPPT_BADGE_STYLES[cpTone];
+            const cpBadgeTitle = cadetProtection?.indicator?.title || 'Cadet Protection';
 
             return (
               <div key={cadet.CAPID} className="cursor-pointer" onClick={() => setSelectedCadet(cadet)}>
@@ -515,9 +514,12 @@ function CadetDashboard(props) {
 
                     {/* Right: Status Badge */}
                     <div className="shrink-0 ml-auto flex flex-col items-end gap-1">
-                      {showCadetProtectionAlert && (
-                        <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${cpBadgeClass}`}>
-                          {cpBadgeText}
+                      {cpRequired && cpBadgeClass && (
+                        <span
+                          className={`text-[10px] font-bold text-white px-2 py-1 rounded-full ${cpBadgeClass}`}
+                          title={cpBadgeTitle}
+                        >
+                          CPPT
                         </span>
                       )}
                       <span className={`text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap ${
