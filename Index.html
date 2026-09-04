@@ -1560,7 +1560,7 @@
             const status = String(m.MbrStatus || "").toUpperCase();
             return validOrgIds.includes(m.ORGID) && status === "ACTIVE";
           });
-          const seniors = unitMembers.filter(m => (m.Type || m.TYPE) === "SENIOR" || (m.Type || m.TYPE) === "LIFE").length;
+          const seniors = unitMembers.filter(isSeniorMemberType).length;
           const cadets = unitMembers.filter(m => (m.Type || m.TYPE) === "CADET").length;
           return { total: unitMembers.length, seniors, cadets };
         }, [dataFiles.members, unitFilter, showAllDescendants]);
@@ -5584,8 +5584,7 @@
             // Find unassigned senior members
             const unassignedSeniors = unitMembers
               .filter(m => {
-                const isSenior = (m.Type || m.TYPE) === "SENIOR" || (m.Type || m.TYPE) === "LIFE";
-                return isSenior && !assignedCAPIDs.has(m.CAPID);
+                return isSeniorMemberType(m) && !assignedCAPIDs.has(m.CAPID);
               })
               .map(m => `${m.Rank} ${m.NameLast}, ${m.NameFirst}`)
               .sort();

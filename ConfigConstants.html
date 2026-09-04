@@ -1,6 +1,6 @@
 <script type="text/babel">
 // --- APP METADATA ---
-const APP_VERSION = '1.16.4';  // Semantic version: major.minor.patch
+const APP_VERSION = '1.16.5';  // Semantic version: major.minor.patch
 
 // APP_CONFIG: Receives values from backend via getAppConfig()
 // These are fallback defaults - actual values loaded from Script Properties
@@ -13,6 +13,12 @@ let APP_CONFIG = {
 // Backwards compatibility aliases
 const APP_NAME = APP_CONFIG.appName;
 const APP_SHORT_NAME = APP_CONFIG.appShortName;
+
+// --- MEMBER TYPES ---
+// Senior-side screens (roster, org chart, unit senior counts) should include
+// every adult membership type except PATRON, which stays hidden per program policy.
+const SENIOR_MEMBER_TYPES = new Set(['SENIOR', 'LIFE', 'FIFTY YEAR', 'CADET SPONSOR', 'INDEFINITE']);
+const isSeniorMemberType = (member) => SENIOR_MEMBER_TYPES.has(String(member?.Type || member?.TYPE || "").toUpperCase());
 
 // --- FEEDBACK CATEGORIES ---
 // Used by the feedback submission form in ReferenceModal

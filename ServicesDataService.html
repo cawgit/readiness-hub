@@ -312,10 +312,9 @@ function createDataService() {
     if (!_rawData.members || _rawData.members.length === 0) return [];
     const validOrgIds = includeDescendants ? getDescendantOrgIds(unitFilter) : [unitFilter];
     const validOrgSet = new Set(validOrgIds.map(id => String(id || "").trim()));
-    // Senior dashboard should only show senior members (including LIFE) with ACTIVE status
+    // Senior dashboard should show all senior-side member types with ACTIVE status
     const membersInScope = _rawData.members.filter(m => {
-      const type = String(m.Type || m.TYPE || "").toUpperCase();
-      const isSenior = type === "SENIOR" || type === "LIFE";
+      const isSenior = isSeniorMemberType(m);
       const status = String(m.MbrStatus || "").toUpperCase();
       const isActive = status === "ACTIVE";
       return isSenior && isActive && validOrgSet.has(String(m.ORGID || "").trim());
