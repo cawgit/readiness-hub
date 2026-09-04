@@ -1239,7 +1239,7 @@
           const capid = String(member.CAPID || '').trim();
           const memberType = String(member.Type || member.TYPE || '').toUpperCase();
           const isCadet = memberType === 'CADET';
-          const isSenior = memberType === 'SENIOR' || memberType === 'LIFE';
+          const isSenior = isSeniorMemberType(member);
           const age = getAgeYears(member.DOB);
           const basicRequired = isSenior || (isCadet && age !== null && age >= 18);
           const basicEligible = isCadet && age !== null && age >= 17;
