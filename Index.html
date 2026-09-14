@@ -1009,6 +1009,22 @@
               tasks = tasks.filter(t => (t.appliesTo || []).includes("ALL") || (t.appliesTo || []).includes(chosenTrack));
             }
 
+            // "Choose a Specialty Track" and "Choose a Duty Assignment" aren't graded via a
+            // separate course task credit in eServices - they're satisfied by the member's
+            // actual SpecTrack/DutyPosition record (member.tracks/member.duties, already pulled
+            // from CAPWATCH). Some members' credit lands on a combined orientation task instead
+            // of the specific TaskID this group's PL_TaskGroupAssignments row expects, so fall
+            // back to the real record when no matching task credit exists.
+            if (levelKey === 'L2P2') {
+              const groupName = (group.GroupName || '').trim().toUpperCase();
+              const hasAnyTrack = (member.tracks || []).length > 0;
+              const hasAnyDuty = (member.duties || []).length > 0;
+              const satisfiedByRecord =
+                (groupName === 'CHOOSE A SPECIALTY TRACK' && hasAnyTrack) ||
+                (groupName === 'CHOOSE A DUTY ASSIGNMENT' && hasAnyDuty);
+              if (satisfiedByRecord) tasks = tasks.map(t => ({ ...t, isDone: true }));
+            }
+
             const completedCount = tasks.filter(t => t.isDone).length;
             const required = parseInt(group.NumberOfRequiredTasks);
             return { groupName: group.GroupName, required, completedCount, isGroupDone: completedCount >= required, tasks };
