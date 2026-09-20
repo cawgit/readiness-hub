@@ -210,8 +210,24 @@ function buildActiveUserIdentity(userEmail, directoryUser) {
   return {
     email: userEmail && userEmail !== 'Unknown' ? userEmail : '',
     capid: getDirectoryCapId(directoryUser),
-    unitNum: getDirectoryUnitNumber(directoryUser)
+    unitNum: getDirectoryUnitNumber(directoryUser),
+    appUrl: getWebAppUrl()
   };
+}
+
+/**
+ * URL this web app is served from, so the page can send the user back to it
+ * after they switch accounts.
+ *
+ * @returns {string} - The deployment URL, or '' when it can't be determined
+ */
+function getWebAppUrl() {
+  try {
+    return ScriptApp.getService().getUrl() || '';
+  } catch (err) {
+    Logger.log("Could not determine the web app URL: " + err.message);
+    return '';
+  }
 }
 
 /**
